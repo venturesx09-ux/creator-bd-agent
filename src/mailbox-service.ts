@@ -4,6 +4,7 @@ import { simpleParser } from "mailparser";
 import type {
   DailySummary,
   EmailClassification,
+  MatchReason,
   MailboxRepository,
   StoredMailbox,
   StoredMessageInput
@@ -63,6 +64,7 @@ export type MessageSummary = {
   classification: EmailClassification;
   matchStatus: "matched" | "unmatched" | "pending";
   matchedRecordId?: string;
+  matchReason?: MatchReason;
 };
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
@@ -318,7 +320,7 @@ function safePreview(value: string | undefined): string {
     .replace(/\u0000/gu, "")
     .replace(/\r\n/gu, "\n")
     .trim()
-    .slice(0, 4_000);
+    .slice(0, 12_000);
 }
 
 function imapError(error: unknown, fallbackCode: string): MailboxServiceError {
@@ -654,7 +656,8 @@ export class MailboxService implements MailboxServiceLike {
       textPreview: payload.textPreview ?? "",
       classification: row.classification,
       matchStatus: row.baseSyncStatus === "synced" ? row.matchStatus : "pending",
-      ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {})
+      ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {}),
+      ...(row.matchReason ? { matchReason: row.matchReason } : {})
     };
   }
 

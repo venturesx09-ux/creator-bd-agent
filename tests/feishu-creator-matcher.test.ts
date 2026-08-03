@@ -4,6 +4,7 @@ import type { MailboxRepository, MatchStatus } from "../src/database.js";
 import {
   baseFieldsForMessage,
   buildCreatorEmailIndex,
+  extractHistoricalCreatorIds,
   FeishuCreatorMatcher
 } from "../src/feishu-creator-matcher.js";
 import type { FeishuClient } from "../src/feishu-client.js";
@@ -28,6 +29,8 @@ describe("Feishu creator matching", () => {
     const repository = {
       loadFeishuEmailIndex: async () => ({ entries: [] }),
       replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [],
+      replaceFeishuCreatorIdIndex: async () => undefined,
       updateFeishuIndexRecord: async () => undefined,
       updateMessageMatch: async (id: string, status: MatchStatus, recordId?: string) => {
         updates.push({ id, status, ...(recordId ? { recordId } : {}) });
@@ -63,6 +66,54 @@ describe("Feishu creator matching", () => {
         "合作阶段": "已回复"
       }
     }]);
+  });
+
+  it("extracts the original outreach creator ID from quoted history", () => {
+    assert.deepEqual(
+      extractHistoricalCreatorIds(
+        "Hi Shark, thanks!\n\n> Hi @creator_handle,\n> Hope you're doing well."
+      ),
+      ["shark", "creator_handle"]
+    );
+  });
+
+  it("falls back to a unique historical creator ID and records the new sender", async () => {
+    const updates: Array<{ status: MatchStatus; recordId?: string; reason?: string }> = [];
+    const baseUpdates: Array<Record<string, unknown>> = [];
+    const repository = {
+      loadFeishuEmailIndex: async () => ({ entries: [] }),
+      replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [],
+      replaceFeishuCreatorIdIndex: async () => undefined,
+      updateFeishuIndexRecord: async () => undefined,
+      updateMessageMatch: async (
+        _id: string,
+        status: MatchStatus,
+        recordId?: string,
+        reason?: string
+      ) => updates.push({ status, ...(recordId ? { recordId } : {}), ...(reason ? { reason } : {}) })
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      listAllBaseRecords: async () => [{
+        record_id: "rec_history",
+        fields: { "达人ID": "creator_handle", "达人邮箱": "old@example.com" }
+      }],
+      updateBaseRecord: async (_recordId: string, fields: Record<string, unknown>) => {
+        baseUpdates.push(fields);
+      }
+    } as unknown as FeishuClient;
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
+      id: "history-message", uid: 2, subject: "Re", from: [],
+      fromAddresses: ["manager@agency.com"], to: [], messageId: "m2",
+      references: [],
+      textPreview: "Hi Shark,\nThanks.\n\n> Hi creator_handle,\n> Hope you're well.",
+      classification: "creator_reply", matchStatus: "pending",
+      receivedAt: "2026-08-04T12:00:00.000Z"
+    }]);
+    assert.deepEqual(updates, [{
+      status: "matched", recordId: "rec_history", reason: "history_creator_id"
+    }]);
+    assert.equal(baseUpdates[0]?.["最近发件邮箱"], "manager@agency.com");
   });
 
   it("does not downgrade an advanced cooperation stage", () => {

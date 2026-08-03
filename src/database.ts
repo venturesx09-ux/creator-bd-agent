@@ -38,6 +38,12 @@ export type EmailClassification =
 
 export type MatchStatus = "matched" | "unmatched" | "pending";
 export type BaseSyncStatus = "pending" | "synced";
+export type MatchReason =
+  | "email_exact"
+  | "history_creator_id"
+  | "history_creator_id_missing"
+  | "creator_id_not_found"
+  | "creator_id_ambiguous";
 
 export type StoredMessage = {
   id: string;
@@ -49,6 +55,7 @@ export type StoredMessage = {
   matchStatus: MatchStatus;
   matchedRecordId?: string;
   baseSyncStatus: BaseSyncStatus;
+  matchReason?: MatchReason;
 };
 
 export type DailySummary = {
@@ -62,6 +69,14 @@ export type DailySummary = {
 export type FeishuEmailIndexEntry = {
   emailHash: string;
   recordId: string;
+  cooperationStage: string;
+  lastContactAt?: number;
+};
+
+export type FeishuCreatorIdIndexEntry = {
+  creatorIdHash: string;
+  recordId?: string;
+  ambiguous: boolean;
   cooperationStage: string;
   lastContactAt?: number;
 };
@@ -109,13 +124,16 @@ export interface MailboxRepository {
   updateMessageMatch(
     messageId: string,
     status: MatchStatus,
-    matchedRecordId?: string
+    matchedRecordId?: string,
+    reason?: MatchReason
   ): Promise<void>;
   loadFeishuEmailIndex(): Promise<{
     entries: FeishuEmailIndexEntry[];
     refreshedAt?: Date;
   }>;
   replaceFeishuEmailIndex(entries: FeishuEmailIndexEntry[]): Promise<void>;
+  loadFeishuCreatorIdIndex(): Promise<FeishuCreatorIdIndexEntry[]>;
+  replaceFeishuCreatorIdIndex(entries: FeishuCreatorIdIndexEntry[]): Promise<void>;
   updateFeishuIndexRecord(
     recordId: string,
     cooperationStage: string,
@@ -150,6 +168,7 @@ type MessageRow = {
   match_status: MatchStatus;
   matched_record_id: string | null;
   base_sync_status: BaseSyncStatus;
+  match_reason: MatchReason | null;
 };
 
 function mailboxFromRow(row: MailboxRow): StoredMailbox {
@@ -229,7 +248,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS classification VARCHAR(40) NOT NULL DEFAULT 'unknown',
         ADD COLUMN IF NOT EXISTS match_status VARCHAR(20) NOT NULL DEFAULT 'pending',
         ADD COLUMN IF NOT EXISTS matched_record_id VARCHAR(128),
-        ADD COLUMN IF NOT EXISTS base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+        ADD COLUMN IF NOT EXISTS base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS match_reason VARCHAR(64)
     `);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
@@ -247,6 +267,20 @@ export class PostgresMailboxRepository implements MailboxRepository {
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS feishu_email_index_record_idx
       ON feishu_email_index (record_id)
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS feishu_creator_id_index (
+        creator_id_hash CHAR(64) PRIMARY KEY,
+        record_id VARCHAR(128),
+        ambiguous BOOLEAN NOT NULL DEFAULT FALSE,
+        cooperation_stage TEXT NOT NULL DEFAULT '',
+        last_contact_at BIGINT,
+        refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS feishu_creator_id_index_record_idx
+      ON feishu_creator_id_index (record_id)
     `);
     await this.pool.query("SELECT 1");
   }
@@ -421,7 +455,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
   async listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
-              classification, match_status, matched_record_id, base_sync_status
+              classification, match_status, matched_record_id, base_sync_status,
+              match_reason
        FROM email_messages
        WHERE mailbox_id = $1
        ORDER BY received_at DESC NULLS LAST, created_at DESC
@@ -437,7 +472,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
       classification: row.classification,
       matchStatus: row.match_status,
       ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
-      baseSyncStatus: row.base_sync_status
+      baseSyncStatus: row.base_sync_status,
+      ...(row.match_reason ? { matchReason: row.match_reason } : {})
     }));
   }
 
@@ -520,6 +556,65 @@ export class PostgresMailboxRepository implements MailboxRepository {
     }
   }
 
+  async loadFeishuCreatorIdIndex(): Promise<FeishuCreatorIdIndexEntry[]> {
+    const result = await this.pool.query<{
+      creator_id_hash: string;
+      record_id: string | null;
+      ambiguous: boolean;
+      cooperation_stage: string;
+      last_contact_at: string | null;
+    }>(`SELECT creator_id_hash, record_id, ambiguous, cooperation_stage,
+               last_contact_at
+        FROM feishu_creator_id_index`);
+    return result.rows.map((row) => ({
+      creatorIdHash: row.creator_id_hash,
+      ...(row.record_id ? { recordId: row.record_id } : {}),
+      ambiguous: row.ambiguous,
+      cooperationStage: row.cooperation_stage,
+      ...(row.last_contact_at
+        ? { lastContactAt: Number.parseInt(row.last_contact_at, 10) }
+        : {})
+    }));
+  }
+
+  async replaceFeishuCreatorIdIndex(
+    entries: FeishuCreatorIdIndexEntry[]
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM feishu_creator_id_index");
+      for (let offset = 0; offset < entries.length; offset += 500) {
+        const batch = entries.slice(offset, offset + 500);
+        if (!batch.length) continue;
+        const values: unknown[] = [];
+        const placeholders = batch.map((entry, index) => {
+          const base = index * 5;
+          values.push(
+            entry.creatorIdHash,
+            entry.recordId ?? null,
+            entry.ambiguous,
+            entry.cooperationStage,
+            entry.lastContactAt ?? null
+          );
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+        });
+        await client.query(
+          `INSERT INTO feishu_creator_id_index
+            (creator_id_hash, record_id, ambiguous, cooperation_stage, last_contact_at)
+           VALUES ${placeholders.join(",")}`,
+          values
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async updateFeishuIndexRecord(
     recordId: string,
     cooperationStage: string,
@@ -527,6 +622,13 @@ export class PostgresMailboxRepository implements MailboxRepository {
   ): Promise<void> {
     await this.pool.query(
       `UPDATE feishu_email_index
+       SET cooperation_stage = $2,
+           last_contact_at = COALESCE($3, last_contact_at)
+       WHERE record_id = $1`,
+      [recordId, cooperationStage, lastContactAt ?? null]
+    );
+    await this.pool.query(
+      `UPDATE feishu_creator_id_index
        SET cooperation_stage = $2,
            last_contact_at = COALESCE($3, last_contact_at)
        WHERE record_id = $1`,
@@ -540,7 +642,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
   ): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
-              classification, match_status, matched_record_id, base_sync_status
+              classification, match_status, matched_record_id, base_sync_status,
+              match_reason
        FROM email_messages
        WHERE mailbox_id = $1
          AND (classification = 'unknown' OR match_status <> 'matched'
@@ -558,7 +661,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
       classification: row.classification,
       matchStatus: row.match_status,
       ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
-      baseSyncStatus: row.base_sync_status
+      baseSyncStatus: row.base_sync_status,
+      ...(row.match_reason ? { matchReason: row.match_reason } : {})
     }));
   }
 
@@ -575,17 +679,19 @@ export class PostgresMailboxRepository implements MailboxRepository {
   async updateMessageMatch(
     messageId: string,
     status: MatchStatus,
-    matchedRecordId?: string
+    matchedRecordId?: string,
+    reason?: MatchReason
   ): Promise<void> {
     await this.pool.query(
       `UPDATE email_messages
        SET match_status = $2::varchar, matched_record_id = $3,
+           match_reason = $4,
            base_sync_status = CASE
              WHEN $2::text = 'matched' THEN 'synced'
              ELSE 'pending'
            END
        WHERE id = $1`,
-      [messageId, status, matchedRecordId ?? null]
+      [messageId, status, matchedRecordId ?? null, reason ?? null]
     );
   }
 

@@ -201,6 +201,7 @@ describe("mailbox admin", () => {
   });
 
   it("serves protected Feishu background progress", async () => {
+    let refreshRequests = 0;
     const app = createApp({
       config,
       mailboxService,
@@ -216,6 +217,12 @@ describe("mailbox admin", () => {
             writebackSucceeded: 21, failed: 0
           }
         })
+      },
+      feishuIndexRefresher: {
+        requestIndexRefresh: () => {
+          refreshRequests += 1;
+          return { status: "started" };
+        }
       }
     });
     await request(app).get("/api/admin/feishu/progress").expect(401);
@@ -225,6 +232,11 @@ describe("mailbox admin", () => {
       .expect(200);
     assert.equal(response.body.messages.processed, 26);
     assert.equal(response.body.index.loaded, 11_418);
+    await request(app)
+      .post("/api/admin/feishu/index/refresh")
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .expect(202);
+    assert.equal(refreshRequests, 1);
   });
 });
 

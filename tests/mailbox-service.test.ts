@@ -72,6 +72,8 @@ class MemoryRepository implements MailboxRepository {
   async updateMessageMatch(): Promise<void> {}
   async loadFeishuEmailIndex() { return { entries: [] }; }
   async replaceFeishuEmailIndex(): Promise<void> {}
+  async loadFeishuCreatorIdIndex() { return []; }
+  async replaceFeishuCreatorIdIndex(): Promise<void> {}
   async updateFeishuIndexRecord(): Promise<void> {}
   async getDailySummary() {
     return {

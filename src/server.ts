@@ -14,12 +14,17 @@ async function start(): Promise<void> {
   await repository.initialize();
   const feishuClient = new FeishuClient({ config: config.feishu });
   const feishuProgress = new FeishuProgressTracker();
+  const feishuMatcher = new FeishuCreatorMatcher(
+    feishuClient,
+    repository,
+    feishuProgress
+  );
   const mailboxService = new MailboxService(
     repository,
     new SecretBox(config.mailboxEncryptionKey),
     config.mailboxInitialSyncLimit,
     undefined,
-    new FeishuCreatorMatcher(feishuClient, repository, feishuProgress)
+    feishuMatcher
   );
   const scheduler = new MailboxSyncScheduler(
     mailboxService,
@@ -31,7 +36,8 @@ async function start(): Promise<void> {
     config,
     mailboxService,
     feishuClient,
-    feishuProgress
+    feishuProgress,
+    feishuIndexRefresher: feishuMatcher
   });
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(

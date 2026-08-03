@@ -38,7 +38,7 @@ export const ADMIN_HTML = `<!doctype html>
       <section class="panel" id="feishu-progress-panel">
         <div class="section-heading">
           <div><h2>飞书匹配与写回</h2><p class="muted" id="feishu-index-text">等待后台任务。</p></div>
-          <span class="badge light" id="feishu-progress-status">空闲</span>
+          <div class="heading-actions"><button id="refresh-feishu-index" class="secondary" type="button">立即刷新飞书索引</button><span class="badge light" id="feishu-progress-status">空闲</span></div>
         </div>
         <div class="progress-panel always-visible">
           <div class="progress-line"><strong id="feishu-progress-text">暂无待处理邮件</strong><span id="feishu-progress-value">0%</span></div>
@@ -244,7 +244,7 @@ export const ADMIN_JS = `(() => {
       : String(progress.index.loaded || 0);
     byId('feishu-progress-status').textContent = statusLabels[progress.status] || '未知';
     byId('feishu-index-text').textContent = (indexLabels[progress.index.status] || '索引状态未知') +
-      (progress.index.status === 'idle' ? '' : ' · ' + source + ' · ' + indexCount + ' 行');
+      (progress.index.status === 'idle' ? '' : ' · ' + source + ' · ' + indexCount + ' 项');
     byId('feishu-progress-bar').value = percentage;
     byId('feishu-progress-value').textContent = percentage + '%';
     byId('feishu-progress-text').textContent = messages.total
@@ -352,6 +352,14 @@ export const ADMIN_JS = `(() => {
     delivery_failure: '退信', bulk_notification: '批量/通知', unknown: '未知'
   };
 
+  const matchReasonLabels = {
+    email_exact: '通过发件邮箱匹配',
+    history_creator_id: '通过历史达人ID匹配',
+    history_creator_id_missing: '历史邮件中未找到Hi + 达人ID',
+    creator_id_not_found: '历史达人ID在飞书中不存在',
+    creator_id_ambiguous: '达人ID重复，无法唯一匹配'
+  };
+
   function showMessages(_mailboxId, label, messages) {
     byId('message-title').textContent = label + ' · 最近邮件';
     const list = byId('message-list');
@@ -362,6 +370,7 @@ export const ADMIN_JS = `(() => {
       card.append(element('h3', message.subject || '(无主题)'));
       card.append(element('span', classificationLabels[message.classification] || '未知', 'pill'));
       card.append(element('span', message.matchStatus === 'matched' ? '已匹配飞书' : message.matchStatus === 'unmatched' ? '未匹配飞书' : '等待匹配', 'pill'));
+      if (message.matchReason) card.append(element('span', matchReasonLabels[message.matchReason] || message.matchReason, 'pill'));
       card.append(element('p', '来自：' + (message.from.join(', ') || '未知')));
       if (message.receivedAt) card.append(element('p', new Date(message.receivedAt).toLocaleString()));
       if (message.textPreview) card.append(element('p', message.textPreview.slice(0, 500)));
@@ -391,6 +400,18 @@ export const ADMIN_JS = `(() => {
 
   byId('refresh-button').addEventListener('click', () => loadMailboxes().catch((error) => notify(error.message, true)));
   byId('refresh-summary').addEventListener('click', () => loadSummary().then(() => notify('概览已刷新')).catch((error) => notify(error.message, true)));
+  byId('refresh-feishu-index').addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      const result = await api('/api/admin/feishu/index/refresh', { method: 'POST' });
+      notify(result.status === 'started' ? '飞书索引刷新已开始，进度会自动更新' : '飞书索引已经在刷新中');
+      await loadFeishuProgress();
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      event.currentTarget.disabled = false;
+    }
+  });
   byId('sync-all-button').addEventListener('click', async (event) => {
     event.currentTarget.disabled = true;
     try { await syncAllMailboxes(); } finally { event.currentTarget.disabled = false; }

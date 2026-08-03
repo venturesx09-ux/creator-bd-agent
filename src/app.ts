@@ -35,6 +35,9 @@ export type CreateAppOptions = {
   scheduleTask?: (task: () => Promise<void>) => void;
   mailboxService?: MailboxServiceLike;
   feishuProgress?: { snapshot(): FeishuProcessingProgress };
+  feishuIndexRefresher?: {
+    requestIndexRefresh(): { status: "started" | "already_running" };
+  };
 };
 
 function safeEqual(left: string, right: string): boolean {
@@ -135,7 +138,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "3.2.2",
+      version: "3.3.0",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -302,6 +305,22 @@ export function createApp(options: CreateAppOptions): express.Express {
           }
         }
       );
+    }
+  );
+
+  app.post(
+    "/api/admin/feishu/index/refresh",
+    adminOnly,
+    (_request, response) => {
+      if (!options.feishuIndexRefresher) {
+        response.status(503).json({
+          error: "index_refresher_unavailable",
+          message: "Feishu index refresher is unavailable"
+        });
+        return;
+      }
+      const result = options.feishuIndexRefresher.requestIndexRefresh();
+      response.status(result.status === "started" ? 202 : 200).json(result);
     }
   );
 
