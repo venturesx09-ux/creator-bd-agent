@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: creator-bd-agent
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FEISHU_APP_ID
+        sync: false
+      - key: FEISHU_APP_SECRET
+        sync: false
+      - key: FEISHU_VERIFICATION_TOKEN
+        sync: false
+      - key: FEISHU_ENCRYPT_KEY
+        sync: false
+      - key: FEISHU_BASE_APP_TOKEN
+        sync: false
+      - key: FEISHU_BASE_TABLE_ID
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true
