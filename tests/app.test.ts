@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createCipheriv, createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import request from "supertest";
 import { createApp } from "../src/app.js";
@@ -31,6 +32,35 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" }
   });
+}
+
+const CALLBACK_TIMESTAMP = "1785757000";
+const CALLBACK_NONCE = "test-nonce";
+
+function callbackHeaders(body: unknown): Record<string, string> {
+  const serialized = JSON.stringify(body);
+  const signature = createHash("sha256")
+    .update(CALLBACK_TIMESTAMP + CALLBACK_NONCE + config.feishu.encryptKey)
+    .update(serialized)
+    .digest("hex");
+  return {
+    "x-lark-request-timestamp": CALLBACK_TIMESTAMP,
+    "x-lark-request-nonce": CALLBACK_NONCE,
+    "x-lark-signature": signature
+  };
+}
+
+function encryptCallback(payload: unknown): { encrypt: string } {
+  const key = createHash("sha256")
+    .update(config.feishu.encryptKey ?? "")
+    .digest();
+  const iv = Buffer.alloc(16, 7);
+  const cipher = createCipheriv("aes-256-cbc", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final()
+  ]);
+  return { encrypt: Buffer.concat([iv, ciphertext]).toString("base64") };
 }
 
 describe("health and authentication", () => {
@@ -203,5 +233,120 @@ describe("Feishu test endpoints", () => {
 
     assert.equal(response.body.error, "feishu_api_error");
     assert.equal(JSON.stringify(response.body).includes(config.feishu.appSecret), false);
+  });
+});
+
+describe("Feishu event callback", () => {
+  it("validates the callback URL challenge", async () => {
+    const app = createApp({ config, logger: silentLogger });
+    const body = {
+      type: "url_verification",
+      token: config.feishu.verificationToken,
+      challenge: "challenge-value"
+    };
+
+    const response = await request(app)
+      .post("/feishu/events")
+      .set(callbackHeaders(body))
+      .send(body)
+      .expect(200);
+
+    assert.deepEqual(response.body, { challenge: "challenge-value" });
+  });
+
+  it("rejects callbacks with invalid signatures", async () => {
+    const app = createApp({ config, logger: silentLogger });
+    const body = {
+      type: "url_verification",
+      token: config.feishu.verificationToken,
+      challenge: "challenge-value"
+    };
+
+    await request(app)
+      .post("/feishu/events")
+      .set({
+        ...callbackHeaders(body),
+        "x-lark-signature": "invalid-signature"
+      })
+      .send(body)
+      .expect(403);
+  });
+
+  it("decrypts, replies to a test command, and ignores a duplicate", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (
+      input: string | URL | globalThis.Request,
+      init?: RequestInit
+    ): Promise<Response> => {
+      const url = String(input);
+      calls.push({ url, ...(init ? { init } : {}) });
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "mock-token",
+          expire: 7200
+        });
+      }
+      return jsonResponse({
+        code: 0,
+        msg: "success",
+        data: { message_id: "om_reply" }
+      });
+    };
+    const pendingTasks: Promise<void>[] = [];
+    const app = createApp({
+      config,
+      logger: silentLogger,
+      feishuClient: new FeishuClient({
+        config: config.feishu,
+        fetchImpl: fetchImpl as typeof fetch
+      }),
+      scheduleTask: (task) => {
+        pendingTasks.push(task());
+      }
+    });
+    const event = {
+      schema: "2.0",
+      header: {
+        event_id: "evt_test_1",
+        event_type: "im.message.receive_v1",
+        app_id: config.feishu.appId,
+        token: config.feishu.verificationToken
+      },
+      event: {
+        sender: { sender_type: "user" },
+        message: {
+          chat_id: "oc_test_chat",
+          message_type: "text",
+          content: JSON.stringify({ text: "@_user_1 测试" })
+        }
+      }
+    };
+    const body = encryptCallback(event);
+
+    await request(app)
+      .post("/feishu/events")
+      .set(callbackHeaders(body))
+      .send(body)
+      .expect(200, { code: 0 });
+    await Promise.all(pendingTasks);
+
+    await request(app)
+      .post("/feishu/events")
+      .set(callbackHeaders(body))
+      .send(body)
+      .expect(200, { code: 0 });
+
+    assert.equal(calls.length, 2);
+    const sentBody = JSON.parse(String(calls[1]?.init?.body)) as {
+      receive_id: string;
+      content: string;
+    };
+    assert.equal(sentBody.receive_id, "oc_test_chat");
+    assert.equal(
+      JSON.parse(sentBody.content).text,
+      "Creator BD Agent运行正常 ✅"
+    );
   });
 });

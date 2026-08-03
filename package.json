@@ -1,9 +1,9 @@
 {
   "name": "creator-bd-agent",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "Phase 1 backend for Feishu bot and Base connectivity tests.",
+  "description": "Feishu bot, event callback, and Base connectivity backend.",
   "engines": {
     "node": ">=22 <25"
   },

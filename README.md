@@ -1,10 +1,11 @@
-# Creator BD Agent — Phase 1
+# Creator BD Agent — Phase 1.1
 
 这是Creator BD Agent的第一阶段后台，只用于验证：
 
 - Render服务可以正常运行；
 - 飞书应用可以自动获取`tenant_access_token`；
 - 机器人可以向指定测试群发送消息；
+- 机器人可以安全接收群内`@机器人 测试`并自动回复；
 - 程序可以读取和更新飞书Base测试记录。
 
 本阶段不会连接真实邮箱，也不会自动发送邮件。
@@ -18,6 +19,7 @@
 | 方法 | 路径 | 鉴权 | 用途 |
 |---|---|---|---|
 | GET | `/health` | 无 | Render健康检查，不返回密钥 |
+| POST | `/feishu/events` | 飞书签名、Token及加密校验 | 接收飞书事件订阅 |
 | POST | `/api/test/feishu/messages` | ADMIN_TOKEN | 向测试群发送文本消息 |
 | GET | `/api/test/feishu/base/records` | ADMIN_TOKEN | 列出Base记录 |
 | PATCH | `/api/test/feishu/base/records/:recordId` | ADMIN_TOKEN | 更新指定测试记录 |
@@ -36,8 +38,8 @@ Authorization: Bearer <ADMIN_TOKEN>
 |---|---|---|
 | `FEISHU_APP_ID` | 是 | 飞书自建应用App ID |
 | `FEISHU_APP_SECRET` | 是 | 飞书自建应用App Secret |
-| `FEISHU_VERIFICATION_TOKEN` | 否（阶段1） | 后续Webhook校验使用 |
-| `FEISHU_ENCRYPT_KEY` | 否（阶段1） | 后续Webhook解密使用 |
+| `FEISHU_VERIFICATION_TOKEN` | 是 | Webhook事件来源校验 |
+| `FEISHU_ENCRYPT_KEY` | 是 | Webhook签名校验及AES-256-CBC解密 |
 | `FEISHU_BASE_APP_TOKEN` | 是 | Wiki节点接口返回的`obj_token` |
 | `FEISHU_BASE_TABLE_ID` | 是 | Base网址`table=`后的值 |
 | `ADMIN_TOKEN` | 是 | 至少32个随机字符 |
@@ -101,6 +103,28 @@ http://localhost:3000/health
 ```
 
 Render免费实例适合当前飞书连接测试；接入IMAP/SMTP邮箱前应升级付费实例，因为免费实例会休眠并限制SMTP常用端口。
+
+## 配置飞书消息接收
+
+必须先将1.1.0版代码部署到Render，再配置事件订阅。
+
+1. 飞书开放平台进入应用，打开`权限管理`；
+2. 开通`获取群组中用户@机器人消息`（`im:message.group_at_msg:readonly`）；
+3. 创建新版本、提交审批并发布；
+4. 进入`事件与回调`或`事件订阅`，选择`将事件发送至开发者服务器`；
+5. 请求地址填写`https://你的Render域名/feishu/events`；
+6. 保存地址，飞书会发送challenge请求完成校验；
+7. 添加事件`接收消息`（`im.message.receive_v1`）；
+8. 再次创建并发布包含事件订阅的新版本；
+9. 将机器人加入内部测试群，在群中发送`@机器人 测试`。
+
+正确结果：
+
+```text
+Creator BD Agent运行正常 ✅
+```
+
+回调接口会验证飞书请求签名、Verification Token与App ID；启用Encrypt Key后会解密加密事件。相同`event_id`在单实例内10分钟只处理一次，避免飞书重试造成重复回复。事件正文和密钥不会写入日志。
 
 ## 获取测试群chat_id
 
@@ -185,9 +209,10 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] Render服务为`Live`；
 - [ ] `/health`返回200且不泄露密钥；
 - [ ] 测试群收到机器人消息；
+- [ ] 飞书事件订阅地址校验成功；
+- [ ] 群内发送`@机器人 测试`后收到自动回复；
 - [ ] 程序能列出Base记录；
 - [ ] 程序能更新`API测试记录`；
 - [ ] 所有写接口都需要`ADMIN_TOKEN`；
 - [ ] 未连接真实邮箱；
 - [ ] 未开启自动发信。
-

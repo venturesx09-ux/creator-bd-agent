@@ -11,13 +11,22 @@ import {
   type AppConfig
 } from "./config.js";
 import { FeishuApiError, FeishuClient } from "./feishu-client.js";
+import {
+  EventDeduplicator,
+  FeishuCallbackError,
+  parseFeishuCallback,
+  verifyFeishuSignature
+} from "./feishu-events.js";
 
 type Logger = Pick<Console, "info" | "error">;
+type RequestWithRawBody = Request & { rawBody?: Buffer };
 
 export type CreateAppOptions = {
   config: AppConfig;
   feishuClient?: FeishuClient;
   logger?: Logger;
+  eventDeduplicator?: EventDeduplicator;
+  scheduleTask?: (task: () => Promise<void>) => void;
 };
 
 function safeEqual(left: string, right: string): boolean {
@@ -80,10 +89,22 @@ export function createApp(options: CreateAppOptions): express.Express {
   const logger = options.logger ?? console;
   const feishuClient =
     options.feishuClient ?? new FeishuClient({ config: config.feishu });
+  const eventDeduplicator =
+    options.eventDeduplicator ?? new EventDeduplicator();
+  const scheduleTask =
+    options.scheduleTask ?? ((task: () => Promise<void>) => void task());
   const app = express();
 
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "64kb", strict: true }));
+  app.use(
+    express.json({
+      limit: "64kb",
+      strict: true,
+      verify: (request, _response, buffer) => {
+        (request as RequestWithRawBody).rawBody = Buffer.from(buffer);
+      }
+    })
+  );
 
   app.use((request, response, next) => {
     const startedAt = Date.now();
@@ -105,13 +126,75 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "1.0.0",
+      version: "1.1.0",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
   });
 
   const adminOnly = requireAdminToken(config);
+
+  app.post("/feishu/events", (request, response, next) => {
+    try {
+      verifyFeishuSignature({
+        timestamp: request.header("x-lark-request-timestamp") ?? undefined,
+        nonce: request.header("x-lark-request-nonce") ?? undefined,
+        signature: request.header("x-lark-signature") ?? undefined,
+        rawBody: (request as RequestWithRawBody).rawBody,
+        encryptKey: config.feishu.encryptKey
+      });
+      const callback = parseFeishuCallback(request.body as unknown, config.feishu);
+      if (callback.kind === "challenge") {
+        response.status(200).json({ challenge: callback.challenge });
+        return;
+      }
+
+      if (
+        callback.kind === "message" &&
+        !eventDeduplicator.isDuplicate(callback.message.eventId) &&
+        (callback.message.command === "测试" ||
+          callback.message.command === "test")
+      ) {
+        const { chatId, eventId } = callback.message;
+        scheduleTask(async () => {
+          try {
+            await feishuClient.sendTextMessage(
+              chatId,
+              "Creator BD Agent运行正常 ✅"
+            );
+            logger.info(
+              JSON.stringify({ event: "feishu_event_replied", eventId })
+            );
+          } catch (error) {
+            if (error instanceof FeishuApiError) {
+              logger.error(
+                JSON.stringify({
+                  event: "feishu_event_reply_failed",
+                  eventId,
+                  httpStatus: error.httpStatus,
+                  feishuCode: error.feishuCode,
+                  logId: error.logId,
+                  message: error.message
+                })
+              );
+              return;
+            }
+            logger.error(
+              JSON.stringify({
+                event: "feishu_event_reply_failed",
+                eventId,
+                message: "Internal error"
+              })
+            );
+          }
+        });
+      }
+
+      response.status(200).json({ code: 0 });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.post(
     "/api/test/feishu/messages",
@@ -262,6 +345,21 @@ export function createApp(options: CreateAppOptions): express.Express {
         message: error.message,
         feishuCode: error.feishuCode,
         logId: error.logId
+      });
+      return;
+    }
+
+    if (error instanceof FeishuCallbackError) {
+      logger.error(
+        JSON.stringify({
+          event: "feishu_callback_rejected",
+          status: error.statusCode,
+          message: error.message
+        })
+      );
+      response.status(error.statusCode).json({
+        error: "feishu_callback_rejected",
+        message: error.message
       });
       return;
     }
