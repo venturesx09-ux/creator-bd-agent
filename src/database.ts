@@ -579,8 +579,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
   ): Promise<void> {
     await this.pool.query(
       `UPDATE email_messages
-       SET match_status = $2, matched_record_id = $3,
-           base_sync_status = CASE WHEN $2 = 'matched' THEN 'synced' ELSE 'pending' END
+       SET match_status = $2::varchar, matched_record_id = $3,
+           base_sync_status = CASE
+             WHEN $2::text = 'matched' THEN 'synced'
+             ELSE 'pending'
+           END
        WHERE id = $1`,
       [messageId, status, matchedRecordId ?? null]
     );
