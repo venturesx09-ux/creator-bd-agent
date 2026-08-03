@@ -62,7 +62,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       .listAllBaseRecords()
       .then((records) => {
         const value = buildCreatorEmailIndex(records);
-        this.cachedIndex = { value, expiresAt: Date.now() + 60_000 };
+        this.cachedIndex = { value, expiresAt: Date.now() + 10 * 60_000 };
         return value;
       })
       .finally(() => {

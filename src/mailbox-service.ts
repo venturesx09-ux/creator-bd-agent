@@ -344,6 +344,8 @@ function imapError(error: unknown, fallbackCode: string): MailboxServiceError {
 }
 
 export class MailboxService implements MailboxServiceLike {
+  private readonly reprocessJobs = new Map<string, Promise<void>>();
+
   constructor(
     private readonly repository: MailboxRepository,
     private readonly secretBox: SecretBox,
@@ -468,7 +470,7 @@ export class MailboxService implements MailboxServiceLike {
             uidValidity,
             lastUid: highestUid
           });
-          await this.reprocessStoredMessages(id);
+          this.scheduleReprocess(id);
           return {
             status: "ok",
             fetched: 0,
@@ -560,10 +562,7 @@ export class MailboxService implements MailboxServiceLike {
           uidValidity,
           lastUid: endUid
         });
-        if (this.creatorMatcher && messages.length) {
-          await this.creatorMatcher.matchMessages(messages).catch(() => undefined);
-        }
-        await this.reprocessStoredMessages(id);
+        this.scheduleReprocess(id);
         return {
           status: "ok",
           fetched: fetched.length,
@@ -642,6 +641,22 @@ export class MailboxService implements MailboxServiceLike {
     if (this.creatorMatcher && candidates.length) {
       await this.creatorMatcher.matchMessages(candidates).catch(() => undefined);
     }
+  }
+
+  private scheduleReprocess(mailboxId: string): void {
+    if (this.reprocessJobs.has(mailboxId)) return;
+    const job = this.reprocessStoredMessages(mailboxId)
+      .catch(() => {
+        console.error(JSON.stringify({
+          event: "mailbox_background_match_failed",
+          mailboxId,
+          message: "Internal error"
+        }));
+      })
+      .finally(() => {
+        this.reprocessJobs.delete(mailboxId);
+      });
+    this.reprocessJobs.set(mailboxId, job);
   }
 
   async syncAllEnabled(): Promise<{

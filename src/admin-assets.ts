@@ -154,7 +154,7 @@ export const ADMIN_JS = `(() => {
         }),
         button('只读同步', async () => {
           const result = await api('/api/admin/mailboxes/' + mailbox.id + '/sync', { method: 'POST' });
-          notify('同步完成：读取 ' + result.fetched + '，新增 ' + result.inserted);
+          notify('同步完成：读取 ' + result.fetched + '，新增 ' + result.inserted + '。飞书匹配正在后台进行，请稍后刷新');
           const recent = await api('/api/admin/mailboxes/' + mailbox.id + '/messages?limit=20');
           showMessages(mailbox.id, mailbox.label, recent.messages);
           await loadMailboxes();
