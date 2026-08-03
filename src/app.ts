@@ -133,7 +133,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "3.0.0",
+      version: "3.0.1",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });

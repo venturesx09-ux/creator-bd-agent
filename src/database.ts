@@ -84,6 +84,14 @@ export interface MailboxRepository {
     errorCode?: string;
   }): Promise<number>;
   listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]>;
+  listMessagesNeedingProcessing(
+    mailboxId: string,
+    limit: number
+  ): Promise<StoredMessage[]>;
+  updateMessageClassification(
+    messageId: string,
+    classification: EmailClassification
+  ): Promise<void>;
   updateMessageMatch(
     messageId: string,
     status: MatchStatus,
@@ -391,6 +399,42 @@ export class PostgresMailboxRepository implements MailboxRepository {
       matchStatus: row.match_status,
       ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {})
     }));
+  }
+
+  async listMessagesNeedingProcessing(
+    mailboxId: string,
+    limit: number
+  ): Promise<StoredMessage[]> {
+    const result = await this.pool.query<MessageRow>(
+      `SELECT id, uid, encrypted_payload, received_at, created_at,
+              classification, match_status, matched_record_id
+       FROM email_messages
+       WHERE mailbox_id = $1
+         AND (classification = 'unknown' OR match_status <> 'matched')
+       ORDER BY received_at DESC NULLS LAST, created_at DESC
+       LIMIT $2`,
+      [mailboxId, limit]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      uid: Number.parseInt(row.uid, 10),
+      encryptedPayload: row.encrypted_payload,
+      ...(row.received_at ? { receivedAt: row.received_at } : {}),
+      createdAt: row.created_at,
+      classification: row.classification,
+      matchStatus: row.match_status,
+      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {})
+    }));
+  }
+
+  async updateMessageClassification(
+    messageId: string,
+    classification: EmailClassification
+  ): Promise<void> {
+    await this.pool.query(
+      "UPDATE email_messages SET classification = $2 WHERE id = $1",
+      [messageId, classification]
+    );
   }
 
   async updateMessageMatch(

@@ -12,6 +12,8 @@ import { SecretBox } from "./secret-box.js";
 
 const MAX_SOURCE_BYTES = 256 * 1024;
 const SYNC_BATCH_SIZE = 100;
+const BACKFILL_BATCH_SIZE = 500;
+const EMAIL_ADDRESS_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}/giu;
 
 export type MailboxConnectionConfig = {
   emailAddress: string;
@@ -63,6 +65,14 @@ export type MessageSummary = {
 };
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
+type LegacyEncryptedMessagePayload = Partial<EncryptedMessagePayload> & {
+  subject?: string;
+  from?: string[];
+  to?: string[];
+  messageId?: string;
+  references?: string[];
+  textPreview?: string;
+};
 
 export class MailboxServiceError extends Error {
   constructor(
@@ -227,6 +237,16 @@ function rawAddresses(
       .map((value) => value.address?.trim().toLowerCase() ?? "")
       .filter(Boolean)
   )].slice(0, 50);
+}
+
+function addressesFromFormatted(values: string[] | undefined): string[] {
+  const output = new Set<string>();
+  for (const value of values ?? []) {
+    for (const match of value.matchAll(EMAIL_ADDRESS_PATTERN)) {
+      output.add(match[0].toLowerCase());
+    }
+  }
+  return [...output].slice(0, 50);
 }
 
 function headerValue(value: unknown): string {
@@ -442,6 +462,7 @@ export class MailboxService implements MailboxServiceLike {
             uidValidity,
             lastUid: highestUid
           });
+          await this.reprocessStoredMessages(id);
           return {
             status: "ok",
             fetched: 0,
@@ -536,6 +557,7 @@ export class MailboxService implements MailboxServiceLike {
         if (this.creatorMatcher && messages.length) {
           await this.creatorMatcher.matchMessages(messages).catch(() => undefined);
         }
+        await this.reprocessStoredMessages(id);
         return {
           status: "ok",
           fetched: fetched.length,
@@ -563,17 +585,57 @@ export class MailboxService implements MailboxServiceLike {
   async listMessages(id: string, limit: number): Promise<MessageSummary[]> {
     await this.requireMailbox(id);
     const rows = await this.repository.listMessages(id, limit);
-    return rows.map((row) => {
-      const payload = this.secretBox.decrypt<EncryptedMessagePayload>(row.encryptedPayload);
-      return {
-        id: row.id,
-        uid: row.uid,
-        ...payload,
-        classification: row.classification,
-        matchStatus: row.matchStatus,
-        ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {})
-      };
-    });
+    return rows.map((row) => this.messageFromStored(row));
+  }
+
+  private messageFromStored(row: import("./database.js").StoredMessage): MessageSummary {
+    const payload = this.secretBox.decrypt<LegacyEncryptedMessagePayload>(
+      row.encryptedPayload
+    );
+    const from = payload.from ?? [];
+    const fromAddresses = payload.fromAddresses?.length
+      ? payload.fromAddresses
+      : addressesFromFormatted(from);
+    return {
+      id: row.id,
+      uid: row.uid,
+      subject: payload.subject || "(无主题)",
+      from,
+      fromAddresses,
+      to: payload.to ?? [],
+      ...(payload.receivedAt ? { receivedAt: payload.receivedAt } : {}),
+      messageId: payload.messageId || `stored:${row.id}`,
+      ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo } : {}),
+      references: payload.references ?? [],
+      textPreview: payload.textPreview ?? "",
+      classification: row.classification,
+      matchStatus: row.matchStatus,
+      ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {})
+    };
+  }
+
+  private async reprocessStoredMessages(mailboxId: string): Promise<void> {
+    const rows = await this.repository.listMessagesNeedingProcessing(
+      mailboxId,
+      BACKFILL_BATCH_SIZE
+    );
+    const messages = rows.map((row) => this.messageFromStored(row));
+    for (const message of messages) {
+      if (message.classification === "unknown") {
+        message.classification = classifyEmail({
+          subject: message.subject,
+          fromAddresses: message.fromAddresses
+        });
+        await this.repository.updateMessageClassification(
+          message.id,
+          message.classification
+        );
+      }
+    }
+    const pending = messages.filter((message) => message.matchStatus === "pending");
+    if (this.creatorMatcher && pending.length) {
+      await this.creatorMatcher.matchMessages(pending).catch(() => undefined);
+    }
   }
 
   async syncAllEnabled(): Promise<{

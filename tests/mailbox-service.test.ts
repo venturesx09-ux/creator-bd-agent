@@ -64,6 +64,8 @@ class MemoryRepository implements MailboxRepository {
   async listMessages(_mailboxId: string, _limit: number): Promise<StoredMessage[]> {
     return [];
   }
+  async listMessagesNeedingProcessing(): Promise<StoredMessage[]> { return []; }
+  async updateMessageClassification(): Promise<void> {}
   async updateMessageMatch(): Promise<void> {}
   async getDailySummary() {
     return {
