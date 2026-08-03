@@ -1,14 +1,19 @@
-# Creator BD Agent — Phase 1.1
+# Creator BD Agent — Phase 2.0
 
-这是Creator BD Agent的第一阶段后台，只用于验证：
+这是Creator BD Agent的第二阶段后台，包含：
 
 - Render服务可以正常运行；
 - 飞书应用可以自动获取`tenant_access_token`；
 - 机器人可以向指定测试群发送消息；
 - 机器人可以安全接收群内`@机器人 测试`并自动回复；
 - 程序可以读取和更新飞书Base测试记录。
+- 受`ADMIN_TOKEN`保护的邮箱管理页面；
+- PostgreSQL持久化存储；
+- AES-256-GCM加密邮箱凭证和邮件内容；
+- 一个或多个邮箱的IMAP连接测试与只读同步；
+- 通过IMAP UID、UIDVALIDITY和Message-ID哈希去重。
 
-本阶段不会连接真实邮箱，也不会自动发送邮件。
+本阶段只读取邮箱，不包含SMTP代码，无法发送邮件。
 
 ## 安全提醒
 
@@ -20,6 +25,12 @@
 |---|---|---|---|
 | GET | `/health` | 无 | Render健康检查，不返回密钥 |
 | POST | `/feishu/events` | 飞书签名、Token及加密校验 | 接收飞书事件订阅 |
+| GET | `/admin` | 页面本身无数据 | 邮箱管理页面 |
+| GET | `/api/admin/mailboxes` | ADMIN_TOKEN | 安全列出邮箱（不返回密码） |
+| POST | `/api/admin/mailboxes` | ADMIN_TOKEN | 加密保存邮箱 |
+| POST | `/api/admin/mailboxes/:mailboxId/test` | ADMIN_TOKEN | 测试IMAP连接 |
+| POST | `/api/admin/mailboxes/:mailboxId/sync` | ADMIN_TOKEN | 手动执行IMAP只读同步 |
+| GET | `/api/admin/mailboxes/:mailboxId/messages` | ADMIN_TOKEN | 查看已同步邮件摘要 |
 | POST | `/api/test/feishu/messages` | ADMIN_TOKEN | 向测试群发送文本消息 |
 | GET | `/api/test/feishu/base/records` | ADMIN_TOKEN | 列出Base记录 |
 | PATCH | `/api/test/feishu/base/records/:recordId` | ADMIN_TOKEN | 更新指定测试记录 |
@@ -43,6 +54,10 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `FEISHU_BASE_APP_TOKEN` | 是 | Wiki节点接口返回的`obj_token` |
 | `FEISHU_BASE_TABLE_ID` | 是 | Base网址`table=`后的值 |
 | `ADMIN_TOKEN` | 是 | 至少32个随机字符 |
+| `DATABASE_URL` | 是 | PostgreSQL内部连接地址；Blueprint自动注入 |
+| `DATABASE_SSL` | 否 | Render内部数据库连接填写`false` |
+| `MAILBOX_ENCRYPTION_KEY` | 是 | 独立的32字节Base64密钥；Blueprint自动生成 |
+| `MAILBOX_INITIAL_SYNC_LIMIT` | 否 | 首次同步最近多少封，默认20，最大100 |
 | `PORT` | 否 | 默认3000；Render会自动提供 |
 
 不要保存临时`tenant_access_token`。程序会使用App ID和App Secret自动获取并缓存。
@@ -56,7 +71,7 @@ npm ci
 npm run check
 ```
 
-测试使用模拟飞书API，不需要真实密钥，也不会向飞书发送消息。
+测试使用模拟飞书API和模拟邮箱服务，不需要真实密钥，不连接真实邮箱，也不会发送消息。
 
 如需用本地环境手动启动，可创建不提交的`.env`，然后运行：
 
@@ -84,10 +99,11 @@ http://localhost:3000/health
 2. 点击`New` → `Blueprint`。
 3. 连接并选择GitHub中的`creator-bd-agent`私有仓库。
 4. Render会读取根目录的`render.yaml`。
-5. 在创建前填入所有标记为`sync: false`的环境变量。
-6. `ADMIN_TOKEN`由Render自动生成，也可以自行设置至少32位随机值。
-7. 点击部署，等待服务变为`Live`。
-8. 打开Render生成的域名加`/health`。
+5. Blueprint会创建`creator-bd-agent-db` PostgreSQL数据库，并通过内部网络注入`DATABASE_URL`；
+6. Blueprint会自动生成`ADMIN_TOKEN`和独立的`MAILBOX_ENCRYPTION_KEY`；
+7. 对于已经存在的Blueprint，上传2.0代码后在Render的Blueprint页面点击`Sync Blueprint`；
+8. 等数据库为`Available`、服务为`Live`；
+9. 打开Render生成的域名加`/health`。
 
 正确结果类似：
 
@@ -97,16 +113,40 @@ http://localhost:3000/health
   "service": "creator-bd-agent",
   "configuration": {
     "feishuCoreConfigured": true,
-    "callbackSecurityConfigured": true
+    "callbackSecurityConfigured": true,
+    "mailboxStorageConfigured": true
   }
 }
 ```
 
-Render免费实例适合当前飞书连接测试；接入IMAP/SMTP邮箱前应升级付费实例，因为免费实例会休眠并限制SMTP常用端口。
+免费实例会休眠，首次打开管理页可能需要等待约一分钟。正式持续同步前应升级为不会休眠的实例。本阶段没有SMTP发送功能。
+
+## 使用邮箱管理页面
+
+部署成功后打开：
+
+```text
+https://你的Render域名/admin
+```
+
+1. 从Render Environment复制当前`ADMIN_TOKEN`；
+2. 在页面输入Token并点击`进入管理`；
+3. 填写邮箱地址、IMAP服务器、端口、加密方式、用户名和应用专用密码；
+4. 点击`加密保存邮箱`；
+5. 点击`测试IMAP`，确认连接成功；
+6. 点击`只读同步`，首次只读取最近20封邮件；
+7. 点击`查看最近邮件`检查主题、发件人和正文预览。
+
+支持两种强制加密连接：
+
+- 端口993 + SSL/TLS；
+- 端口143 + STARTTLS。
+
+系统使用IMAP只读模式打开`INBOX`，不会修改已读状态、移动或删除邮件。每次最多处理100封；如果结果显示`hasMore: true`，再次点击只读同步即可继续。
 
 ## 配置飞书消息接收
 
-必须先将1.1.1版代码部署到Render，再配置事件订阅。
+必须先将2.0.0版代码部署到Render，再配置事件订阅。
 
 1. 飞书开放平台进入应用，打开`权限管理`；
 2. 开通`获取群组中用户@机器人消息`（`im:message.group_at_msg:readonly`）；
@@ -201,7 +241,21 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - 确认字段名与飞书Base完全一致；
 - 测试字段`系统测试`应为文本类型。
 
-## 第一阶段验收
+### 邮箱管理页面显示服务不可用
+
+- 在Render Blueprint页面点击`Sync Blueprint`；
+- 确认`creator-bd-agent-db`状态为`Available`；
+- 确认服务环境变量存在`DATABASE_URL`和`MAILBOX_ENCRYPTION_KEY`；
+- 不要把这些变量值发到聊天中。
+
+### IMAP连接失败
+
+- 确认邮箱服务商已经开启IMAP；
+- 优先使用应用专用密码，不要使用网页登录密码；
+- 确认服务器、端口和TLS方式完全匹配；
+- 部分企业邮箱会限制海外服务器IP，需要向服务商申请放行。
+
+## 第二阶段验收
 
 - [ ] `npm run check`全部通过；
 - [ ] GitHub仓库为Private；
@@ -214,5 +268,11 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] 程序能列出Base记录；
 - [ ] 程序能更新`API测试记录`；
 - [ ] 所有写接口都需要`ADMIN_TOKEN`；
-- [ ] 未连接真实邮箱；
+- [ ] PostgreSQL数据库为`Available`；
+- [ ] `/health`显示`mailboxStorageConfigured: true`；
+- [ ] `/admin`可以使用`ADMIN_TOKEN`进入；
+- [ ] 邮箱密码不会通过任何接口返回；
+- [ ] 一个试点邮箱通过IMAP连接测试；
+- [ ] 能以只读模式同步最近邮件且不会修改已读状态；
+- [ ] 重复同步不会重复保存同一封邮件；
 - [ ] 未开启自动发信。

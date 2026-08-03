@@ -3,8 +3,10 @@ import { createCipheriv, createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import request from "supertest";
 import { createApp } from "../src/app.js";
+import { ADMIN_JS } from "../src/admin-assets.js";
 import type { AppConfig } from "../src/config.js";
 import { FeishuClient } from "../src/feishu-client.js";
+import type { MailboxServiceLike } from "../src/mailbox-service.js";
 
 const ADMIN_TOKEN = "test-admin-token-that-is-longer-than-32-chars";
 
@@ -12,6 +14,12 @@ const config: AppConfig = {
   nodeEnv: "test",
   port: 3000,
   adminToken: ADMIN_TOKEN,
+  database: {
+    url: "postgresql://test:test@localhost:5432/test",
+    ssl: false
+  },
+  mailboxEncryptionKey: Buffer.alloc(32, 1).toString("base64"),
+  mailboxInitialSyncLimit: 20,
   feishu: {
     appId: "test-app-id",
     appSecret: "test-app-secret",
@@ -83,6 +91,81 @@ describe("health and authentication", () => {
       .get("/api/test/feishu/base/records")
       .set("authorization", "Bearer wrong-token")
       .expect(403);
+  });
+});
+
+describe("mailbox admin", () => {
+  const mailbox = {
+    id: "2b0660a8-c5d9-4b46-a49d-cb9c576ece68",
+    label: "Test mailbox",
+    brand: "Tripo",
+    emailAddress: "test@example.com",
+    senderName: "Test",
+    imapHost: "imap.example.com",
+    imapPort: 993,
+    imapSecurity: "tls" as const,
+    enabled: true
+  };
+  const mailboxService: MailboxServiceLike = {
+    listMailboxes: async () => [mailbox],
+    createMailbox: async () => mailbox,
+    testConnection: async () => ({
+      status: "ok",
+      messagesInInbox: 12,
+      nextUid: 13
+    }),
+    syncMailbox: async () => ({
+      status: "ok",
+      fetched: 1,
+      inserted: 1,
+      hasMore: false,
+      messages: []
+    }),
+    listMessages: async () => []
+  };
+
+  it("serves an admin page without embedding secrets", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    const response = await request(app).get("/admin").expect(200);
+
+    assert.match(response.text, /邮箱管理/u);
+    assert.equal(response.text.includes(config.adminToken), false);
+    assert.equal(response.text.includes(config.feishu.appSecret), false);
+    assert.match(
+      String(response.headers["content-security-policy"]),
+      /default-src 'self'/u
+    );
+    assert.doesNotThrow(() => new Function(ADMIN_JS));
+  });
+
+  it("protects mailbox APIs and returns only safe mailbox metadata", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    await request(app).get("/api/admin/mailboxes").expect(401);
+
+    const response = await request(app)
+      .get("/api/admin/mailboxes")
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .expect(200);
+
+    assert.equal(response.body.mailboxes[0].emailAddress, "test@example.com");
+    assert.equal(JSON.stringify(response.body).includes("imapPassword"), false);
+  });
+
+  it("supports protected IMAP test and sync actions", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    const auth = { authorization: `Bearer ${ADMIN_TOKEN}` };
+
+    const testResponse = await request(app)
+      .post(`/api/admin/mailboxes/${mailbox.id}/test`)
+      .set(auth)
+      .expect(200);
+    assert.equal(testResponse.body.messagesInInbox, 12);
+
+    const syncResponse = await request(app)
+      .post(`/api/admin/mailboxes/${mailbox.id}/sync`)
+      .set(auth)
+      .expect(200);
+    assert.equal(syncResponse.body.inserted, 1);
   });
 });
 

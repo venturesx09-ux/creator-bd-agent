@@ -1,9 +1,19 @@
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { PostgresMailboxRepository } from "./database.js";
+import { MailboxService } from "./mailbox-service.js";
+import { SecretBox } from "./secret-box.js";
 
-try {
+async function start(): Promise<void> {
   const config = loadConfig();
-  const app = createApp({ config });
+  const repository = new PostgresMailboxRepository(config.database);
+  await repository.initialize();
+  const mailboxService = new MailboxService(
+    repository,
+    new SecretBox(config.mailboxEncryptionKey),
+    config.mailboxInitialSyncLimit
+  );
+  const app = createApp({ config, mailboxService });
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(
       JSON.stringify({
@@ -15,22 +25,35 @@ try {
     );
   });
 
+  let stopping = false;
   const shutdown = (signal: string): void => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
     console.info(JSON.stringify({ event: "server_stopping", signal }));
-    server.close((error) => {
+    server.close(async (error) => {
       if (error) {
         console.error(
           JSON.stringify({ event: "server_stop_failed", message: error.message })
         );
         process.exitCode = 1;
       }
+      await repository.close().catch(() => {
+        console.error(
+          JSON.stringify({ event: "database_stop_failed", message: "Database error" })
+        );
+        process.exitCode = 1;
+      });
     });
   };
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
-} catch (error) {
+}
+
+start().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : "Startup failed";
   console.error(JSON.stringify({ event: "startup_failed", message }));
   process.exitCode = 1;
-}
+});

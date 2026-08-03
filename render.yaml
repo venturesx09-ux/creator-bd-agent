@@ -21,3 +21,20 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: creator-bd-agent-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"
+      - key: MAILBOX_ENCRYPTION_KEY
+        generateValue: true
+      - key: MAILBOX_INITIAL_SYNC_LIMIT
+        value: "20"
+
+databases:
+  - name: creator-bd-agent-db
+    plan: free
+    databaseName: creator_bd_agent
+    user: creator_bd_agent
+    ipAllowList: []

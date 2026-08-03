@@ -17,6 +17,11 @@ import {
   parseFeishuCallback,
   verifyFeishuSignature
 } from "./feishu-events.js";
+import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from "./admin-assets.js";
+import {
+  MailboxServiceError,
+  type MailboxServiceLike
+} from "./mailbox-service.js";
 
 type Logger = Pick<Console, "info" | "error">;
 type RequestWithRawBody = Request & { rawBody?: Buffer };
@@ -27,6 +32,7 @@ export type CreateAppOptions = {
   logger?: Logger;
   eventDeduplicator?: EventDeduplicator;
   scheduleTask?: (task: () => Promise<void>) => void;
+  mailboxService?: MailboxServiceLike;
 };
 
 function safeEqual(left: string, right: string): boolean {
@@ -93,6 +99,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     options.eventDeduplicator ?? new EventDeduplicator();
   const scheduleTask =
     options.scheduleTask ?? ((task: () => Promise<void>) => void task());
+  const mailboxService = options.mailboxService;
   const app = express();
 
   app.disable("x-powered-by");
@@ -126,13 +133,149 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "1.1.1",
+      version: "2.0.0",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
   });
 
   const adminOnly = requireAdminToken(config);
+
+  const adminHeaders = (response: Response, contentType: string): void => {
+    response.set({
+      "content-type": contentType,
+      "cache-control": "no-store",
+      "content-security-policy":
+        "default-src 'self'; script-src 'self'; style-src 'self'; " +
+        "connect-src 'self'; img-src 'none'; object-src 'none'; base-uri 'none'; " +
+        "frame-ancestors 'none'; form-action 'self'",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer"
+    });
+  };
+
+  app.get("/admin", (_request, response) => {
+    adminHeaders(response, "text/html; charset=utf-8");
+    response.status(200).send(ADMIN_HTML);
+  });
+
+  app.get("/admin/styles.css", (_request, response) => {
+    adminHeaders(response, "text/css; charset=utf-8");
+    response.status(200).send(ADMIN_CSS);
+  });
+
+  app.get("/admin/app.js", (_request, response) => {
+    adminHeaders(response, "text/javascript; charset=utf-8");
+    response.status(200).send(ADMIN_JS);
+  });
+
+  const requireMailboxService = (): MailboxServiceLike => {
+    if (!mailboxService) {
+      throw new MailboxServiceError(
+        "Mailbox service is unavailable",
+        503,
+        "MAILBOX_SERVICE_UNAVAILABLE"
+      );
+    }
+    return mailboxService;
+  };
+
+  app.get("/api/admin/mailboxes", adminOnly, async (_request, response, next) => {
+    try {
+      const mailboxes = await requireMailboxService().listMailboxes();
+      response.status(200).json({ mailboxes });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/admin/mailboxes", adminOnly, async (request, response, next) => {
+    try {
+      const mailbox = await requireMailboxService().createMailbox(
+        request.body as unknown
+      );
+      response.status(201).json({ mailbox });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post(
+    "/api/admin/mailboxes/:mailboxId/test",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "mailboxId is invalid"
+          });
+          return;
+        }
+        const result = await requireMailboxService().testConnection(mailboxId);
+        response.status(200).json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/mailboxes/:mailboxId/sync",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "mailboxId is invalid"
+          });
+          return;
+        }
+        const result = await requireMailboxService().syncMailbox(mailboxId);
+        response.status(200).json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/mailboxes/:mailboxId/messages",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "mailboxId is invalid"
+          });
+          return;
+        }
+        const limit = Number.parseInt(
+          typeof request.query.limit === "string" ? request.query.limit : "20",
+          10
+        );
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "limit must be between 1 and 100"
+          });
+          return;
+        }
+        const messages = await requireMailboxService().listMessages(
+          mailboxId,
+          limit
+        );
+        response.status(200).json({ messages });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
 
   app.post("/feishu/events", (request, response, next) => {
     try {
@@ -360,6 +503,21 @@ export function createApp(options: CreateAppOptions): express.Express {
       );
       response.status(error.statusCode).json({
         error: "feishu_callback_rejected",
+        message: error.message
+      });
+      return;
+    }
+
+    if (error instanceof MailboxServiceError) {
+      logger.error(
+        JSON.stringify({
+          event: "mailbox_operation_failed",
+          errorCode: error.errorCode,
+          status: error.statusCode
+        })
+      );
+      response.status(error.statusCode).json({
+        error: error.errorCode,
         message: error.message
       });
       return;

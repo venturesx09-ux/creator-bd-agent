@@ -2,6 +2,12 @@ export type AppConfig = {
   nodeEnv: string;
   port: number;
   adminToken: string;
+  database: {
+    url: string;
+    ssl: boolean;
+  };
+  mailboxEncryptionKey: string;
+  mailboxInitialSyncLimit: number;
   feishu: {
     appId: string;
     appSecret: string;
@@ -33,6 +39,43 @@ function parsePort(raw: string | undefined): number {
   return port;
 }
 
+function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  throw new Error("Boolean environment values must be true or false");
+}
+
+function parseSyncLimit(raw: string | undefined): number {
+  const limit = Number.parseInt(raw ?? "20", 10);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("MAILBOX_INITIAL_SYNC_LIMIT must be between 1 and 100");
+  }
+  return limit;
+}
+
+function encryptionKey(env: NodeJS.ProcessEnv): string {
+  const value = required(env, "MAILBOX_ENCRYPTION_KEY");
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(value, "base64");
+  } catch {
+    throw new Error("MAILBOX_ENCRYPTION_KEY must be valid base64");
+  }
+  if (decoded.length !== 32 || decoded.toString("base64") !== value) {
+    throw new Error(
+      "MAILBOX_ENCRYPTION_KEY must be a base64-encoded 32-byte key"
+    );
+  }
+  return value;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const adminToken = required(env, "ADMIN_TOKEN");
   if (adminToken.length < 32) {
@@ -46,6 +89,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     nodeEnv: env.NODE_ENV?.trim() || "development",
     port: parsePort(env.PORT),
     adminToken,
+    database: {
+      url: required(env, "DATABASE_URL"),
+      ssl: parseBoolean(env.DATABASE_SSL, false)
+    },
+    mailboxEncryptionKey: encryptionKey(env),
+    mailboxInitialSyncLimit: parseSyncLimit(env.MAILBOX_INITIAL_SYNC_LIMIT),
     feishu: {
       appId: required(env, "FEISHU_APP_ID"),
       appSecret: required(env, "FEISHU_APP_SECRET"),
@@ -60,6 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 export function configurationStatus(config: AppConfig): {
   feishuCoreConfigured: boolean;
   callbackSecurityConfigured: boolean;
+  mailboxStorageConfigured: boolean;
 } {
   return {
     feishuCoreConfigured: Boolean(
@@ -70,6 +120,9 @@ export function configurationStatus(config: AppConfig): {
     ),
     callbackSecurityConfigured: Boolean(
       config.feishu.verificationToken && config.feishu.encryptKey
+    ),
+    mailboxStorageConfigured: Boolean(
+      config.database.url && config.mailboxEncryptionKey
     )
   };
 }
