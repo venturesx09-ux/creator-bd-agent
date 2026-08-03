@@ -9,7 +9,10 @@ describe("Feishu creator matching", () => {
   it("extracts email addresses from nested Base fields", () => {
     const index = buildCreatorEmailIndex([{
       record_id: "rec_1",
-      fields: { Email: [{ text: "Creator@Example.com" }], note: "backup: other@example.com" }
+      fields: {
+        Email: [{ text: "Creator@Example.com" }],
+        note: { a: { b: { c: { d: { e: { value: "backup: other@example.com" } } } } } }
+      }
     }]);
     assert.equal(index.get("creator@example.com"), "rec_1");
     assert.equal(index.get("other@example.com"), "rec_1");

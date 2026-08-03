@@ -90,6 +90,7 @@ export class FeishuClient {
   async listAllBaseRecords(): Promise<FeishuBaseRecord[]> {
     const records: FeishuBaseRecord[] = [];
     let pageToken: string | undefined;
+    const seenPageTokens = new Set<string>();
     for (let page = 0; page < 100; page += 1) {
       const response = await this.listBaseRecords({
         pageSize: 500,
@@ -99,13 +100,23 @@ export class FeishuClient {
           items?: FeishuBaseRecord[];
           has_more?: boolean;
           page_token?: string;
+          total?: number;
         };
       };
       records.push(...(response.data?.items ?? []));
-      if (!response.data?.has_more || !response.data.page_token) {
+      const nextPageToken = response.data?.page_token;
+      const total = response.data?.total;
+      const totalIndicatesMore =
+        typeof total === "number" && records.length < total;
+      if (
+        (!response.data?.has_more && !totalIndicatesMore) ||
+        !nextPageToken ||
+        seenPageTokens.has(nextPageToken)
+      ) {
         return records;
       }
-      pageToken = response.data.page_token;
+      seenPageTokens.add(nextPageToken);
+      pageToken = nextPageToken;
     }
     throw new FeishuApiError(
       "Feishu Base contains more than the supported 50,000 records",

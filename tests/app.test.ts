@@ -199,6 +199,39 @@ describe("mailbox admin", () => {
 });
 
 describe("Feishu test endpoints", () => {
+  it("continues Base pagination when total shows more records", async () => {
+    const fetchImpl = async (
+      input: string | URL | globalThis.Request
+    ): Promise<Response> => {
+      const url = String(input);
+      if (url.endsWith("/auth/v3/tenant_access_token/internal")) {
+        return jsonResponse({
+          code: 0, msg: "ok", tenant_access_token: "mock-token", expire: 7200
+        });
+      }
+      if (url.includes("page_token=next-page")) {
+        return jsonResponse({
+          code: 0, data: {
+            items: [{ record_id: "rec_2", fields: {} }],
+            has_more: false, total: 2
+          }
+        });
+      }
+      return jsonResponse({
+        code: 0, data: {
+          items: [{ record_id: "rec_1", fields: {} }],
+          has_more: false, page_token: "next-page", total: 2
+        }
+      });
+    };
+    const client = new FeishuClient({
+      config: config.feishu,
+      fetchImpl: fetchImpl as typeof fetch
+    });
+    const records = await client.listAllBaseRecords();
+    assert.deepEqual(records.map((record) => record.record_id), ["rec_1", "rec_2"]);
+  });
+
   it("obtains a token and sends a protected group message", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (

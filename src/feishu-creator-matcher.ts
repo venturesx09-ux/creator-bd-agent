@@ -2,35 +2,18 @@ import type { MailboxRepository } from "./database.js";
 import { FeishuClient, type FeishuBaseRecord } from "./feishu-client.js";
 import type { CreatorMatcher, MessageSummary } from "./mailbox-service.js";
 
-const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}/giu;
-
-function collectEmails(value: unknown, output: Set<string>, depth = 0): void {
-  if (depth > 5 || value === null || value === undefined) return;
-  if (typeof value === "string") {
-    for (const match of value.matchAll(EMAIL_PATTERN)) {
-      output.add(match[0].toLowerCase());
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectEmails(item, output, depth + 1);
-    return;
-  }
-  if (typeof value === "object") {
-    for (const item of Object.values(value as Record<string, unknown>)) {
-      collectEmails(item, output, depth + 1);
-    }
-  }
-}
+const EMAIL_PATTERN_SOURCE = "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}";
 
 export function buildCreatorEmailIndex(
   records: FeishuBaseRecord[]
 ): Map<string, string> {
   const index = new Map<string, string>();
   for (const record of records) {
-    const emails = new Set<string>();
-    collectEmails(record.fields, emails);
-    for (const email of emails) {
+    const serializedFields = JSON.stringify(record.fields);
+    const emails = serializedFields.match(
+      new RegExp(EMAIL_PATTERN_SOURCE, "giu")
+    ) ?? [];
+    for (const email of new Set(emails.map((value) => value.toLowerCase()))) {
       if (!index.has(email)) index.set(email, record.record_id);
     }
   }
