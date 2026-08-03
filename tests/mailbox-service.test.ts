@@ -8,6 +8,7 @@ import type {
 } from "../src/database.js";
 import {
   classifyEmail,
+  messagesNeedingMatch,
   MailboxService,
   MailboxServiceError,
   type MailboxConnectionConfig
@@ -150,5 +151,21 @@ describe("email rule classification", () => {
       subject: "Weekly update", fromAddresses: ["no-reply@example.com"],
       precedence: "bulk"
     }), "bulk_notification");
+  });
+});
+
+describe("email rematching", () => {
+  it("retries both pending and previously unmatched messages", () => {
+    const base = {
+      uid: 1, subject: "Re", from: [], fromAddresses: [], to: [],
+      messageId: "m", references: [], textPreview: "",
+      classification: "creator_reply" as const
+    };
+    const result = messagesNeedingMatch([
+      { ...base, id: "pending", matchStatus: "pending" },
+      { ...base, id: "unmatched", matchStatus: "unmatched" },
+      { ...base, id: "matched", matchStatus: "matched" }
+    ]);
+    assert.deepEqual(result.map((message) => message.id), ["pending", "unmatched"]);
   });
 });

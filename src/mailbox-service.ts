@@ -288,6 +288,12 @@ export function classifyEmail(input: {
   return input.fromAddresses.length ? "creator_reply" : "unknown";
 }
 
+export function messagesNeedingMatch(
+  messages: MessageSummary[]
+): MessageSummary[] {
+  return messages.filter((message) => message.matchStatus !== "matched");
+}
+
 function normalizedReferences(value: string | string[] | undefined): string[] {
   if (!value) {
     return [];
@@ -632,9 +638,9 @@ export class MailboxService implements MailboxServiceLike {
         );
       }
     }
-    const pending = messages.filter((message) => message.matchStatus === "pending");
-    if (this.creatorMatcher && pending.length) {
-      await this.creatorMatcher.matchMessages(pending).catch(() => undefined);
+    const candidates = messagesNeedingMatch(messages);
+    if (this.creatorMatcher && candidates.length) {
+      await this.creatorMatcher.matchMessages(candidates).catch(() => undefined);
     }
   }
 
