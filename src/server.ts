@@ -6,18 +6,20 @@ import { MailboxSyncScheduler } from "./mailbox-scheduler.js";
 import { SecretBox } from "./secret-box.js";
 import { FeishuClient } from "./feishu-client.js";
 import { FeishuCreatorMatcher } from "./feishu-creator-matcher.js";
+import { FeishuProgressTracker } from "./feishu-progress.js";
 
 async function start(): Promise<void> {
   const config = loadConfig();
   const repository = new PostgresMailboxRepository(config.database);
   await repository.initialize();
   const feishuClient = new FeishuClient({ config: config.feishu });
+  const feishuProgress = new FeishuProgressTracker();
   const mailboxService = new MailboxService(
     repository,
     new SecretBox(config.mailboxEncryptionKey),
     config.mailboxInitialSyncLimit,
     undefined,
-    new FeishuCreatorMatcher(feishuClient, repository)
+    new FeishuCreatorMatcher(feishuClient, repository, feishuProgress)
   );
   const scheduler = new MailboxSyncScheduler(
     mailboxService,
@@ -25,7 +27,12 @@ async function start(): Promise<void> {
   );
   scheduler.start();
   void scheduler.run();
-  const app = createApp({ config, mailboxService, feishuClient });
+  const app = createApp({
+    config,
+    mailboxService,
+    feishuClient,
+    feishuProgress
+  });
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(
       JSON.stringify({

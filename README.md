@@ -1,4 +1,4 @@
-# Creator BD Agent — Phase 3.2.0
+# Creator BD Agent — Phase 3.2.1
 
 这是Creator BD Agent的第三阶段后台。在第二阶段全部能力之上新增：
 
@@ -25,6 +25,8 @@
 - 匹配成功后写回最近发件邮箱、最后联系时间、邮件同步状态和邮件分类；普通达人回复仅在早期阶段推进为已回复。
 - 飞书邮箱索引以SHA-256哈希持久化到PostgreSQL，重启后无需先重新扫描一万多行；索引每30分钟后台刷新。
 - 管理页刷新后在同一标签会话内保持登录，并提供刷新概览、刷新邮箱、刷新邮件、全部同步和同步进度条。
+- 新增飞书后台实时进度：索引读取行数、任务总数、已处理、匹配成功、未匹配、写回成功和失败；管理页每2秒自动刷新。
+- 单条飞书写回失败不再中断整批处理，失败邮件保留并在后续同步重试。
 
 本阶段只读取邮箱，不包含SMTP代码，无法发送邮件。
 
@@ -47,6 +49,7 @@
 | PATCH | `/api/admin/mailboxes/:mailboxId/status` | ADMIN_TOKEN | 启用或停用邮箱 |
 | DELETE | `/api/admin/mailboxes/:mailboxId` | ADMIN_TOKEN | 删除没有同步记录的空邮箱 |
 | GET | `/api/admin/daily-summary` | ADMIN_TOKEN | 过去24小时分类与匹配统计 |
+| GET | `/api/admin/feishu/progress` | ADMIN_TOKEN | 查询飞书索引、匹配和写回实时进度 |
 | POST | `/api/test/feishu/messages` | ADMIN_TOKEN | 向测试群发送文本消息 |
 | GET | `/api/test/feishu/base/records` | ADMIN_TOKEN | 列出Base记录 |
 | PATCH | `/api/test/feishu/base/records/:recordId` | ADMIN_TOKEN | 更新指定测试记录 |
@@ -305,7 +308,7 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] 一个试点邮箱通过IMAP连接测试；
 - [ ] 能以只读模式同步最近邮件且不会修改已读状态；
 - [ ] 重复同步不会重复保存同一封邮件；
-- [ ] `/health`显示版本`3.2.0`；
+- [ ] `/health`显示版本`3.2.1`；
 - [ ] 管理页顶部显示过去24小时摘要；
 - [ ] 邮件显示规则分类和飞书匹配状态；
 - [ ] 错误邮箱可以停用，空邮箱可以安全删除；

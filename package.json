@@ -1,6 +1,6 @@
 {
   "name": "creator-bd-agent",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "private": true,
   "type": "module",
   "description": "Creator BD backend with Feishu matching and automatic encrypted read-only IMAP synchronization.",

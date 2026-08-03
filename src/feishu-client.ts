@@ -87,7 +87,9 @@ export class FeishuClient {
     );
   }
 
-  async listAllBaseRecords(): Promise<FeishuBaseRecord[]> {
+  async listAllBaseRecords(
+    onProgress?: (progress: { loaded: number; total?: number; page: number }) => void
+  ): Promise<FeishuBaseRecord[]> {
     const records: FeishuBaseRecord[] = [];
     let pageToken: string | undefined;
     const seenPageTokens = new Set<string>();
@@ -104,6 +106,13 @@ export class FeishuClient {
         };
       };
       records.push(...(response.data?.items ?? []));
+      onProgress?.({
+        loaded: records.length,
+        ...(typeof response.data?.total === "number"
+          ? { total: response.data.total }
+          : {}),
+        page: page + 1
+      });
       const nextPageToken = response.data?.page_token;
       const total = response.data?.total;
       const totalIndicatesMore =

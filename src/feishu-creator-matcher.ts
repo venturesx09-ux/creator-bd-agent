@@ -4,6 +4,7 @@ import type {
   MailboxRepository
 } from "./database.js";
 import { FeishuClient, type FeishuBaseRecord } from "./feishu-client.js";
+import { FeishuProgressTracker } from "./feishu-progress.js";
 import type { CreatorMatcher, MessageSummary } from "./mailbox-service.js";
 
 const EMAIL_PATTERN_SOURCE = "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}";
@@ -133,42 +134,63 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
 
   constructor(
     private readonly feishuClient: FeishuClient,
-    private readonly repository: MailboxRepository
+    private readonly repository: MailboxRepository,
+    private readonly progress = new FeishuProgressTracker()
   ) {}
 
   async matchMessages(messages: MessageSummary[]): Promise<void> {
-    const index = await this.getEmailIndex();
+    this.progress.beginBatch(messages.length);
+    let index: Map<string, FeishuBaseRecord>;
+    try {
+      index = await this.getEmailIndex();
+    } catch (error) {
+      this.progress.indexFailed();
+      this.progress.failBatch("飞书索引加载失败");
+      throw error;
+    }
     const orderedMessages = [...messages].sort((left, right) =>
       Date.parse(left.receivedAt ?? "") - Date.parse(right.receivedAt ?? "")
     );
     for (const message of orderedMessages) {
-      const matchedRecord = message.fromAddresses
-        .map((email) => index.get(emailHash(email)))
-        .find(Boolean);
-      if (matchedRecord) {
-        const fields = baseFieldsForMessage(message, matchedRecord);
-        await this.feishuClient.updateBaseRecord(
-          matchedRecord.record_id,
-          fields
-        );
-        Object.assign(matchedRecord.fields, fields);
-        await this.repository.updateFeishuIndexRecord(
-          matchedRecord.record_id,
-          currentStage(matchedRecord.fields),
-          currentTimestamp(matchedRecord.fields["最后联系时间"])
-        );
-        await this.repository.updateMessageMatch(
-          message.id,
-          "matched",
-          matchedRecord.record_id
-        );
-        message.matchStatus = "matched";
-        message.matchedRecordId = matchedRecord.record_id;
-      } else {
-        await this.repository.updateMessageMatch(message.id, "unmatched");
-        message.matchStatus = "unmatched";
+      try {
+        const matchedRecord = message.fromAddresses
+          .map((email) => index.get(emailHash(email)))
+          .find(Boolean);
+        if (matchedRecord) {
+          const fields = baseFieldsForMessage(message, matchedRecord);
+          await this.feishuClient.updateBaseRecord(
+            matchedRecord.record_id,
+            fields
+          );
+          Object.assign(matchedRecord.fields, fields);
+          await this.repository.updateFeishuIndexRecord(
+            matchedRecord.record_id,
+            currentStage(matchedRecord.fields),
+            currentTimestamp(matchedRecord.fields["最后联系时间"])
+          );
+          await this.repository.updateMessageMatch(
+            message.id,
+            "matched",
+            matchedRecord.record_id
+          );
+          message.matchStatus = "matched";
+          message.matchedRecordId = matchedRecord.record_id;
+          this.progress.messageSucceeded(true);
+        } else {
+          await this.repository.updateMessageMatch(message.id, "unmatched");
+          message.matchStatus = "unmatched";
+          this.progress.messageSucceeded(false);
+        }
+      } catch (error) {
+        this.progress.messageFailed();
+        console.error(JSON.stringify({
+          event: "feishu_message_writeback_failed",
+          messageId: message.id,
+          message: error instanceof Error ? error.message : "Internal error"
+        }));
       }
     }
+    this.progress.endBatch();
   }
 
   private async getEmailIndex(): Promise<Map<string, FeishuBaseRecord>> {
@@ -187,6 +209,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
     const stored = await this.repository.loadFeishuEmailIndex();
     if (stored.entries.length) {
       const value = indexFromPersistentEntries(stored.entries);
+      this.progress.indexReady(stored.entries.length, "database");
       const age = stored.refreshedAt
         ? Date.now() - stored.refreshedAt.getTime()
         : Number.POSITIVE_INFINITY;
@@ -197,7 +220,8 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
           : 5 * 60_000)
       };
       if (age >= INDEX_FRESHNESS_MS) {
-        void this.refreshIndex().catch((error: unknown) => {
+        void this.refreshIndex("refreshing").catch((error: unknown) => {
+          this.progress.indexFailed();
           console.error(JSON.stringify({
             event: "feishu_index_refresh_failed",
             message: error instanceof Error ? error.message : "Internal error"
@@ -206,15 +230,21 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       }
       return value;
     }
-    return this.refreshIndex();
+    return this.refreshIndex("loading");
   }
 
-  private async refreshIndex(): Promise<Map<string, FeishuBaseRecord>> {
-    const records = await this.feishuClient.listAllBaseRecords();
+  private async refreshIndex(
+    status: "loading" | "refreshing"
+  ): Promise<Map<string, FeishuBaseRecord>> {
+    this.progress.indexLoading(status);
+    const records = await this.feishuClient.listAllBaseRecords((value) => {
+      this.progress.indexPage(value.loaded, value.total);
+    });
     const entries = persistentEntries(records);
     await this.repository.replaceFeishuEmailIndex(entries);
     const value = indexFromPersistentEntries(entries);
     this.cachedIndex = { value, expiresAt: Date.now() + INDEX_FRESHNESS_MS };
+    this.progress.indexReady(entries.length, "feishu");
     return value;
   }
 }

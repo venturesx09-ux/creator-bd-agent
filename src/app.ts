@@ -18,6 +18,7 @@ import {
   verifyFeishuSignature
 } from "./feishu-events.js";
 import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from "./admin-assets.js";
+import type { FeishuProcessingProgress } from "./feishu-progress.js";
 import {
   MailboxServiceError,
   type MailboxServiceLike
@@ -33,6 +34,7 @@ export type CreateAppOptions = {
   eventDeduplicator?: EventDeduplicator;
   scheduleTask?: (task: () => Promise<void>) => void;
   mailboxService?: MailboxServiceLike;
+  feishuProgress?: { snapshot(): FeishuProcessingProgress };
 };
 
 function safeEqual(left: string, right: string): boolean {
@@ -133,7 +135,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "3.2.0",
+      version: "3.2.1",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -277,6 +279,29 @@ export function createApp(options: CreateAppOptions): express.Express {
       } catch (error) {
         next(error);
       }
+    }
+  );
+
+  app.get(
+    "/api/admin/feishu/progress",
+    adminOnly,
+    (_request, response) => {
+      response.status(200).json(
+        options.feishuProgress?.snapshot() ?? {
+          status: "idle",
+          updatedAt: new Date().toISOString(),
+          activeBatches: 0,
+          index: { status: "idle", loaded: 0 },
+          messages: {
+            total: 0,
+            processed: 0,
+            matched: 0,
+            unmatched: 0,
+            writebackSucceeded: 0,
+            failed: 0
+          }
+        }
+      );
     }
   );
 

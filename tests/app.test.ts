@@ -199,6 +199,33 @@ describe("mailbox admin", () => {
       .expect(200);
     assert.equal(summary.body.matched, 1);
   });
+
+  it("serves protected Feishu background progress", async () => {
+    const app = createApp({
+      config,
+      mailboxService,
+      logger: silentLogger,
+      feishuProgress: {
+        snapshot: () => ({
+          status: "processing",
+          updatedAt: new Date(0).toISOString(),
+          activeBatches: 1,
+          index: { status: "ready", source: "database", loaded: 11_418, total: 11_418 },
+          messages: {
+            total: 48, processed: 26, matched: 21, unmatched: 5,
+            writebackSucceeded: 21, failed: 0
+          }
+        })
+      }
+    });
+    await request(app).get("/api/admin/feishu/progress").expect(401);
+    const response = await request(app)
+      .get("/api/admin/feishu/progress")
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .expect(200);
+    assert.equal(response.body.messages.processed, 26);
+    assert.equal(response.body.index.loaded, 11_418);
+  });
 });
 
 describe("Feishu test endpoints", () => {

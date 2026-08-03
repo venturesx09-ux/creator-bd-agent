@@ -35,6 +35,26 @@ export const ADMIN_HTML = `<!doctype html>
         <div id="summary-grid" class="summary-grid"></div>
       </section>
 
+      <section class="panel" id="feishu-progress-panel">
+        <div class="section-heading">
+          <div><h2>飞书匹配与写回</h2><p class="muted" id="feishu-index-text">等待后台任务。</p></div>
+          <span class="badge light" id="feishu-progress-status">空闲</span>
+        </div>
+        <div class="progress-panel always-visible">
+          <div class="progress-line"><strong id="feishu-progress-text">暂无待处理邮件</strong><span id="feishu-progress-value">0%</span></div>
+          <progress id="feishu-progress-bar" value="0" max="100"></progress>
+        </div>
+        <div class="progress-stats">
+          <div><strong id="feishu-total">0</strong><span>本轮任务</span></div>
+          <div><strong id="feishu-processed">0</strong><span>已处理</span></div>
+          <div><strong id="feishu-matched">0</strong><span>匹配成功</span></div>
+          <div><strong id="feishu-unmatched">0</strong><span>未匹配</span></div>
+          <div><strong id="feishu-written">0</strong><span>写回成功</span></div>
+          <div><strong id="feishu-failed">0</strong><span>失败</span></div>
+        </div>
+        <p class="muted progress-updated" id="feishu-progress-updated">页面每2秒自动更新。</p>
+      </section>
+
       <section class="panel">
         <div class="section-heading">
           <div><h2>已连接邮箱</h2><p class="muted">密码不会显示，也不会写入日志。</p></div>
@@ -82,13 +102,16 @@ export const ADMIN_HTML = `<!doctype html>
 </body>
 </html>`;
 
-export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading,.heading-actions,.progress-line{display:flex;gap:12px;align-items:center}.section-heading,.progress-line{justify-content:space-between}.section-heading{margin-bottom:18px}.heading-actions{flex-wrap:wrap;justify-content:flex-end}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.progress-panel{background:#f7f7f4;border:1px solid #e8e8e3;border-radius:12px;padding:14px;margin-bottom:16px}.progress-panel progress{width:100%;height:12px;margin:10px 0 6px;accent-color:#147a39}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.row,.section-heading{align-items:stretch;flex-direction:column}.row button{width:100%}.heading-actions{justify-content:flex-start}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
+export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading,.heading-actions,.progress-line{display:flex;gap:12px;align-items:center}.section-heading,.progress-line{justify-content:space-between}.section-heading{margin-bottom:18px}.heading-actions{flex-wrap:wrap;justify-content:flex-end}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.progress-panel{background:#f7f7f4;border:1px solid #e8e8e3;border-radius:12px;padding:14px;margin-bottom:16px}.progress-panel.always-visible{margin-bottom:12px}.progress-panel progress{width:100%;height:12px;margin:10px 0 6px;accent-color:#147a39}.progress-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}.progress-stats div{background:#f7f7f4;border-radius:10px;padding:12px}.progress-stats strong{display:block;font-size:22px}.progress-stats span{font-size:11px;color:#696969}.progress-updated{margin-top:12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.progress-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.row,.section-heading{align-items:stretch;flex-direction:column}.row button{width:100%}.heading-actions{justify-content:flex-start}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
 
 export const ADMIN_JS = `(() => {
   const tokenStorageKey = 'creator-bd-agent-admin-token';
   let adminToken = window.sessionStorage.getItem(tokenStorageKey) || '';
   let currentMailboxes = [];
   let currentMessageMailbox = null;
+  let progressTimer = null;
+  let progressRequestRunning = false;
+  let lastProgressStatus = 'idle';
   const byId = (id) => document.getElementById(id);
   const status = byId('status');
 
@@ -112,6 +135,7 @@ export const ADMIN_JS = `(() => {
       if (response.status === 401 || response.status === 403) {
         window.sessionStorage.removeItem(tokenStorageKey);
         adminToken = '';
+        stopProgressPolling();
         byId('workspace').hidden = true;
         byId('login-panel').hidden = false;
       }
@@ -198,6 +222,72 @@ export const ADMIN_JS = `(() => {
 
   async function loadSummary() {
     renderSummary(await api('/api/admin/daily-summary'));
+  }
+
+  function renderFeishuProgress(progress) {
+    const messages = progress.messages;
+    const percentage = messages.total
+      ? Math.min(100, Math.round(messages.processed * 100 / messages.total))
+      : 0;
+    const statusLabels = {
+      idle: '空闲', processing: '处理中', completed: '已完成',
+      completed_with_errors: '部分失败', failed: '处理失败'
+    };
+    const indexLabels = {
+      idle: '等待建立飞书索引', loading: '正在扫描飞书Base',
+      refreshing: '正在后台刷新飞书索引', ready: '飞书索引已就绪',
+      failed: '飞书索引读取失败'
+    };
+    const source = progress.index.source === 'database' ? '数据库缓存' : '飞书Base';
+    const indexCount = progress.index.total
+      ? progress.index.loaded + ' / ' + progress.index.total
+      : String(progress.index.loaded || 0);
+    byId('feishu-progress-status').textContent = statusLabels[progress.status] || '未知';
+    byId('feishu-index-text').textContent = (indexLabels[progress.index.status] || '索引状态未知') +
+      (progress.index.status === 'idle' ? '' : ' · ' + source + ' · ' + indexCount + ' 行');
+    byId('feishu-progress-bar').value = percentage;
+    byId('feishu-progress-value').textContent = percentage + '%';
+    byId('feishu-progress-text').textContent = messages.total
+      ? '正在处理：' + messages.processed + ' / ' + messages.total
+      : '暂无待处理邮件';
+    byId('feishu-total').textContent = String(messages.total);
+    byId('feishu-processed').textContent = String(messages.processed);
+    byId('feishu-matched').textContent = String(messages.matched);
+    byId('feishu-unmatched').textContent = String(messages.unmatched);
+    byId('feishu-written').textContent = String(messages.writebackSucceeded);
+    byId('feishu-failed').textContent = String(messages.failed);
+    byId('feishu-progress-updated').textContent = '最后更新：' +
+      new Date(progress.updatedAt).toLocaleTimeString() + ' · 页面每2秒自动更新';
+  }
+
+  async function loadFeishuProgress() {
+    if (progressRequestRunning || !adminToken) return;
+    progressRequestRunning = true;
+    try {
+      const progress = await api('/api/admin/feishu/progress');
+      renderFeishuProgress(progress);
+      if (lastProgressStatus === 'processing' &&
+          (progress.status === 'completed' || progress.status === 'completed_with_errors')) {
+        await loadSummary();
+      }
+      lastProgressStatus = progress.status;
+    } finally {
+      progressRequestRunning = false;
+    }
+  }
+
+  function startProgressPolling() {
+    if (progressTimer) return;
+    loadFeishuProgress().catch((error) => notify(error.message, true));
+    progressTimer = window.setInterval(() => {
+      loadFeishuProgress().catch((error) => notify(error.message, true));
+    }, 2000);
+  }
+
+  function stopProgressPolling() {
+    if (progressTimer) window.clearInterval(progressTimer);
+    progressTimer = null;
+    progressRequestRunning = false;
   }
 
   async function loadMessages(mailboxId, label) {
@@ -290,6 +380,7 @@ export const ADMIN_JS = `(() => {
       byId('admin-token').value = '';
       byId('login-panel').hidden = true;
       byId('workspace').hidden = false;
+      startProgressPolling();
       notify('管理员验证成功');
     } catch (error) {
       window.sessionStorage.removeItem(tokenStorageKey);
@@ -309,6 +400,7 @@ export const ADMIN_JS = `(() => {
     loadMessages(currentMessageMailbox.id, currentMessageMailbox.label).then(() => notify('邮件列表已刷新')).catch((error) => notify(error.message, true));
   });
   byId('logout-button').addEventListener('click', () => {
+    stopProgressPolling();
     window.sessionStorage.removeItem(tokenStorageKey);
     adminToken = '';
     currentMailboxes = [];
@@ -344,6 +436,7 @@ export const ADMIN_JS = `(() => {
     loadMailboxes().then(() => {
       byId('login-panel').hidden = true;
       byId('workspace').hidden = false;
+      startProgressPolling();
     }).catch((error) => notify(error.message, true));
   }
 })();`;
