@@ -106,7 +106,7 @@ Render免费实例适合当前飞书连接测试；接入IMAP/SMTP邮箱前应�
 
 ## 配置飞书消息接收
 
-必须先将1.1.0版代码部署到Render，再配置事件订阅。
+必须先将1.1.1版代码部署到Render，再配置事件订阅。
 
 1. 飞书开放平台进入应用，打开`权限管理`；
 2. 开通`获取群组中用户@机器人消息`（`im:message.group_at_msg:readonly`）；
@@ -124,7 +124,7 @@ Render免费实例适合当前飞书连接测试；接入IMAP/SMTP邮箱前应�
 Creator BD Agent运行正常 ✅
 ```
 
-回调接口会验证飞书请求签名、Verification Token与App ID；启用Encrypt Key后会解密加密事件。相同`event_id`在单实例内10分钟只处理一次，避免飞书重试造成重复回复。事件正文和密钥不会写入日志。
+URL Challenge阶段使用Verification Token与App ID校验并原样返回challenge；正式事件会额外强制验证飞书请求签名。启用Encrypt Key后会解密加密事件。相同`event_id`在单实例内10分钟只处理一次，避免飞书重试造成重复回复。事件正文和密钥不会写入日志。
 
 ## 获取测试群chat_id
 

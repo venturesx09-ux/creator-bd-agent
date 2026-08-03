@@ -126,7 +126,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "1.1.0",
+      version: "1.1.1",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -136,6 +136,12 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   app.post("/feishu/events", (request, response, next) => {
     try {
+      const callback = parseFeishuCallback(request.body as unknown, config.feishu);
+      if (callback.kind === "challenge") {
+        response.status(200).json({ challenge: callback.challenge });
+        return;
+      }
+
       verifyFeishuSignature({
         timestamp: request.header("x-lark-request-timestamp") ?? undefined,
         nonce: request.header("x-lark-request-nonce") ?? undefined,
@@ -143,11 +149,6 @@ export function createApp(options: CreateAppOptions): express.Express {
         rawBody: (request as RequestWithRawBody).rawBody,
         encryptKey: config.feishu.encryptKey
       });
-      const callback = parseFeishuCallback(request.body as unknown, config.feishu);
-      if (callback.kind === "challenge") {
-        response.status(200).json({ challenge: callback.challenge });
-        return;
-      }
 
       if (
         callback.kind === "message" &&

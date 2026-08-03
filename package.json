@@ -1,6 +1,6 @@
 {
   "name": "creator-bd-agent",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "description": "Feishu bot, event callback, and Base connectivity backend.",

@@ -239,27 +239,45 @@ describe("Feishu test endpoints", () => {
 describe("Feishu event callback", () => {
   it("validates the callback URL challenge", async () => {
     const app = createApp({ config, logger: silentLogger });
-    const body = {
+    const payload = {
       type: "url_verification",
       token: config.feishu.verificationToken,
       challenge: "challenge-value"
     };
+    const body = encryptCallback(payload);
 
     const response = await request(app)
       .post("/feishu/events")
-      .set(callbackHeaders(body))
       .send(body)
       .expect(200);
 
     assert.deepEqual(response.body, { challenge: "challenge-value" });
   });
 
-  it("rejects callbacks with invalid signatures", async () => {
+  it("rejects a challenge with an invalid verification token", async () => {
+    const app = createApp({ config, logger: silentLogger });
+
+    await request(app)
+      .post("/feishu/events")
+      .send({
+        type: "url_verification",
+        token: "wrong-verification-token",
+        challenge: "challenge-value"
+      })
+      .expect(403);
+  });
+
+  it("rejects formal callbacks with invalid signatures", async () => {
     const app = createApp({ config, logger: silentLogger });
     const body = {
-      type: "url_verification",
-      token: config.feishu.verificationToken,
-      challenge: "challenge-value"
+      schema: "2.0",
+      header: {
+        event_id: "evt_invalid_signature",
+        event_type: "unknown.event",
+        app_id: config.feishu.appId,
+        token: config.feishu.verificationToken
+      },
+      event: {}
     };
 
     await request(app)
