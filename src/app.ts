@@ -133,7 +133,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "3.0.1",
+      version: "3.0.2",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -443,10 +443,10 @@ export function createApp(options: CreateAppOptions): express.Express {
             : "20",
           10
         );
-        if (!Number.isInteger(requestedSize) || requestedSize < 1 || requestedSize > 100) {
+        if (!Number.isInteger(requestedSize) || requestedSize < 1 || requestedSize > 500) {
           response.status(400).json({
             error: "invalid_request",
-            message: "page_size must be an integer between 1 and 100"
+            message: "page_size must be an integer between 1 and 500"
           });
           return;
         }

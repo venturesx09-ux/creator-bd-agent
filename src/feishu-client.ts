@@ -90,9 +90,9 @@ export class FeishuClient {
   async listAllBaseRecords(): Promise<FeishuBaseRecord[]> {
     const records: FeishuBaseRecord[] = [];
     let pageToken: string | undefined;
-    for (let page = 0; page < 50; page += 1) {
+    for (let page = 0; page < 100; page += 1) {
       const response = await this.listBaseRecords({
-        pageSize: 100,
+        pageSize: 500,
         ...(pageToken ? { pageToken } : {})
       }) as {
         data?: {
@@ -107,7 +107,10 @@ export class FeishuClient {
       }
       pageToken = response.data.page_token;
     }
-    throw new FeishuApiError("Feishu Base pagination exceeded safe limit", 502);
+    throw new FeishuApiError(
+      "Feishu Base contains more than the supported 50,000 records",
+      502
+    );
   }
 
   async updateBaseRecord(

@@ -38,13 +38,18 @@ export function buildCreatorEmailIndex(
 }
 
 export class FeishuCreatorMatcher implements CreatorMatcher {
+  private cachedIndex:
+    | { value: Map<string, string>; expiresAt: number }
+    | undefined;
+  private indexRequest: Promise<Map<string, string>> | undefined;
+
   constructor(
     private readonly feishuClient: FeishuClient,
     private readonly repository: MailboxRepository
   ) {}
 
   async matchMessages(messages: MessageSummary[]): Promise<void> {
-    const index = buildCreatorEmailIndex(await this.feishuClient.listAllBaseRecords());
+    const index = await this.getEmailIndex();
     for (const message of messages) {
       const matchedRecordId = message.fromAddresses
         .map((email) => index.get(email.toLowerCase()))
@@ -62,5 +67,24 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
         message.matchStatus = "unmatched";
       }
     }
+  }
+
+  private async getEmailIndex(): Promise<Map<string, string>> {
+    const now = Date.now();
+    if (this.cachedIndex && this.cachedIndex.expiresAt > now) {
+      return this.cachedIndex.value;
+    }
+    if (this.indexRequest) return this.indexRequest;
+    this.indexRequest = this.feishuClient
+      .listAllBaseRecords()
+      .then((records) => {
+        const value = buildCreatorEmailIndex(records);
+        this.cachedIndex = { value, expiresAt: Date.now() + 60_000 };
+        return value;
+      })
+      .finally(() => {
+        this.indexRequest = undefined;
+      });
+    return this.indexRequest;
   }
 }
