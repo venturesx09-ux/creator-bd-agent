@@ -2,18 +2,30 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { PostgresMailboxRepository } from "./database.js";
 import { MailboxService } from "./mailbox-service.js";
+import { MailboxSyncScheduler } from "./mailbox-scheduler.js";
 import { SecretBox } from "./secret-box.js";
+import { FeishuClient } from "./feishu-client.js";
+import { FeishuCreatorMatcher } from "./feishu-creator-matcher.js";
 
 async function start(): Promise<void> {
   const config = loadConfig();
   const repository = new PostgresMailboxRepository(config.database);
   await repository.initialize();
+  const feishuClient = new FeishuClient({ config: config.feishu });
   const mailboxService = new MailboxService(
     repository,
     new SecretBox(config.mailboxEncryptionKey),
-    config.mailboxInitialSyncLimit
+    config.mailboxInitialSyncLimit,
+    undefined,
+    new FeishuCreatorMatcher(feishuClient, repository)
   );
-  const app = createApp({ config, mailboxService });
+  const scheduler = new MailboxSyncScheduler(
+    mailboxService,
+    config.mailboxSyncIntervalMinutes
+  );
+  scheduler.start();
+  void scheduler.run();
+  const app = createApp({ config, mailboxService, feishuClient });
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(
       JSON.stringify({
@@ -31,6 +43,7 @@ async function start(): Promise<void> {
       return;
     }
     stopping = true;
+    scheduler.stop();
     console.info(JSON.stringify({ event: "server_stopping", signal }));
     server.close(async (error) => {
       if (error) {

@@ -20,6 +20,7 @@ const config: AppConfig = {
   },
   mailboxEncryptionKey: Buffer.alloc(32, 1).toString("base64"),
   mailboxInitialSyncLimit: 20,
+  mailboxSyncIntervalMinutes: 10,
   feishu: {
     appId: "test-app-id",
     appSecret: "test-app-secret",
@@ -109,6 +110,8 @@ describe("mailbox admin", () => {
   const mailboxService: MailboxServiceLike = {
     listMailboxes: async () => [mailbox],
     createMailbox: async () => mailbox,
+    setMailboxEnabled: async (_id, enabled) => ({ ...mailbox, enabled }),
+    deleteMailbox: async () => ({ status: "deleted" }),
     testConnection: async () => ({
       status: "ok",
       messagesInInbox: 12,
@@ -121,7 +124,15 @@ describe("mailbox admin", () => {
       hasMore: false,
       messages: []
     }),
-    listMessages: async () => []
+    listMessages: async () => [],
+    syncAllEnabled: async () => ({ attempted: 1, succeeded: 1, failed: 0 }),
+    getDailySummary: async () => ({
+      since: new Date(0).toISOString(), total: 1, matched: 1, unmatched: 0, pending: 0,
+      classifications: {
+        creator_reply: 1, automatic_reply: 0, delivery_failure: 0,
+        bulk_notification: 0, unknown: 0
+      }
+    })
   };
 
   it("serves an admin page without embedding secrets", async () => {
@@ -166,6 +177,24 @@ describe("mailbox admin", () => {
       .set(auth)
       .expect(200);
     assert.equal(syncResponse.body.inserted, 1);
+
+    const statusResponse = await request(app)
+      .patch(`/api/admin/mailboxes/${mailbox.id}/status`)
+      .set(auth)
+      .send({ enabled: false })
+      .expect(200);
+    assert.equal(statusResponse.body.mailbox.enabled, false);
+
+    await request(app)
+      .delete(`/api/admin/mailboxes/${mailbox.id}`)
+      .set(auth)
+      .expect(200);
+
+    const summary = await request(app)
+      .get("/api/admin/daily-summary")
+      .set(auth)
+      .expect(200);
+    assert.equal(summary.body.matched, 1);
   });
 });
 

@@ -8,6 +8,7 @@ export type AppConfig = {
   };
   mailboxEncryptionKey: string;
   mailboxInitialSyncLimit: number;
+  mailboxSyncIntervalMinutes: number;
   feishu: {
     appId: string;
     appSecret: string;
@@ -60,6 +61,14 @@ function parseSyncLimit(raw: string | undefined): number {
   return limit;
 }
 
+function parseSyncInterval(raw: string | undefined): number {
+  const minutes = Number.parseInt(raw ?? "10", 10);
+  if (!Number.isInteger(minutes) || minutes < 5 || minutes > 60) {
+    throw new Error("MAILBOX_SYNC_INTERVAL_MINUTES must be between 5 and 60");
+  }
+  return minutes;
+}
+
 function encryptionKey(env: NodeJS.ProcessEnv): string {
   const value = required(env, "MAILBOX_ENCRYPTION_KEY");
   let decoded: Buffer;
@@ -95,6 +104,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     mailboxEncryptionKey: encryptionKey(env),
     mailboxInitialSyncLimit: parseSyncLimit(env.MAILBOX_INITIAL_SYNC_LIMIT),
+    mailboxSyncIntervalMinutes: parseSyncInterval(
+      env.MAILBOX_SYNC_INTERVAL_MINUTES
+    ),
     feishu: {
       appId: required(env, "FEISHU_APP_ID"),
       appSecret: required(env, "FEISHU_APP_SECRET"),

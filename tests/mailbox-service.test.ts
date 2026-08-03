@@ -7,6 +7,7 @@ import type {
   StoredMessageInput
 } from "../src/database.js";
 import {
+  classifyEmail,
   MailboxService,
   MailboxServiceError,
   type MailboxConnectionConfig
@@ -39,6 +40,18 @@ class MemoryRepository implements MailboxRepository {
     this.rows.push(row);
     return row;
   }
+  async setMailboxEnabled(id: string, enabled: boolean): Promise<boolean> {
+    const row = this.rows.find((item) => item.id === id);
+    if (!row) return false;
+    row.enabled = enabled;
+    return true;
+  }
+  async deleteMailboxIfEmpty(id: string): Promise<"deleted" | "not_found" | "has_messages"> {
+    const index = this.rows.findIndex((item) => item.id === id);
+    if (index < 0) return "not_found";
+    this.rows.splice(index, 1);
+    return "deleted";
+  }
   async recordConnectionTest(): Promise<void> {}
   async recordSyncFailure(): Promise<void> {}
   async saveMessagesAndCursor(_input: {
@@ -50,6 +63,16 @@ class MemoryRepository implements MailboxRepository {
   }): Promise<number> { return 0; }
   async listMessages(_mailboxId: string, _limit: number): Promise<StoredMessage[]> {
     return [];
+  }
+  async updateMessageMatch(): Promise<void> {}
+  async getDailySummary() {
+    return {
+      total: 0, matched: 0, unmatched: 0, pending: 0,
+      classifications: {
+        creator_reply: 0, automatic_reply: 0, delivery_failure: 0,
+        bulk_notification: 0, unknown: 0
+      }
+    };
   }
 }
 
@@ -106,5 +129,24 @@ describe("MailboxService configuration", () => {
       (error: unknown) =>
         error instanceof MailboxServiceError && error.errorCode === "INVALID_INPUT"
     );
+  });
+});
+
+describe("email rule classification", () => {
+  it("separates creator replies, automatic replies, bounces and bulk mail", () => {
+    assert.equal(classifyEmail({
+      subject: "Re: collaboration", fromAddresses: ["creator@example.com"]
+    }), "creator_reply");
+    assert.equal(classifyEmail({
+      subject: "Automatic Reply", fromAddresses: ["creator@example.com"],
+      autoSubmitted: "auto-replied"
+    }), "automatic_reply");
+    assert.equal(classifyEmail({
+      subject: "Delivery Status Notification", fromAddresses: ["mailer-daemon@example.com"]
+    }), "delivery_failure");
+    assert.equal(classifyEmail({
+      subject: "Weekly update", fromAddresses: ["no-reply@example.com"],
+      precedence: "bulk"
+    }), "bulk_notification");
   });
 });

@@ -26,7 +26,17 @@ export type StoredMessageInput = {
   messageKeyHash: string;
   encryptedPayload: string;
   receivedAt?: Date;
+  classification: EmailClassification;
 };
+
+export type EmailClassification =
+  | "creator_reply"
+  | "automatic_reply"
+  | "delivery_failure"
+  | "bulk_notification"
+  | "unknown";
+
+export type MatchStatus = "matched" | "unmatched" | "pending";
 
 export type StoredMessage = {
   id: string;
@@ -34,6 +44,17 @@ export type StoredMessage = {
   encryptedPayload: string;
   receivedAt?: Date;
   createdAt: Date;
+  classification: EmailClassification;
+  matchStatus: MatchStatus;
+  matchedRecordId?: string;
+};
+
+export type DailySummary = {
+  total: number;
+  matched: number;
+  unmatched: number;
+  pending: number;
+  classifications: Record<EmailClassification, number>;
 };
 
 export interface MailboxRepository {
@@ -47,6 +68,8 @@ export interface MailboxRepository {
     brand: string;
     encryptedConfig: string;
   }): Promise<StoredMailbox>;
+  setMailboxEnabled(id: string, enabled: boolean): Promise<boolean>;
+  deleteMailboxIfEmpty(id: string): Promise<"deleted" | "not_found" | "has_messages">;
   recordConnectionTest(
     id: string,
     status: "success" | "failed",
@@ -61,6 +84,12 @@ export interface MailboxRepository {
     errorCode?: string;
   }): Promise<number>;
   listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]>;
+  updateMessageMatch(
+    messageId: string,
+    status: MatchStatus,
+    matchedRecordId?: string
+  ): Promise<void>;
+  getDailySummary(since: Date): Promise<DailySummary>;
 }
 
 type MailboxRow = {
@@ -85,6 +114,9 @@ type MessageRow = {
   encrypted_payload: string;
   received_at: Date | null;
   created_at: Date;
+  classification: EmailClassification;
+  match_status: MatchStatus;
+  matched_record_id: string | null;
 };
 
 function mailboxFromRow(row: MailboxRow): StoredMailbox {
@@ -159,6 +191,16 @@ export class PostgresMailboxRepository implements MailboxRepository {
       CREATE INDEX IF NOT EXISTS email_messages_mailbox_received_idx
       ON email_messages (mailbox_id, received_at DESC, created_at DESC)
     `);
+    await this.pool.query(`
+      ALTER TABLE email_messages
+        ADD COLUMN IF NOT EXISTS classification VARCHAR(40) NOT NULL DEFAULT 'unknown',
+        ADD COLUMN IF NOT EXISTS match_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS matched_record_id VARCHAR(128)
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
+      ON email_messages (received_at DESC, classification, match_status)
+    `);
     await this.pool.query("SELECT 1");
   }
 
@@ -199,6 +241,47 @@ export class PostgresMailboxRepository implements MailboxRepository {
       throw new Error("Mailbox insert failed");
     }
     return mailboxFromRow(row);
+  }
+
+  async setMailboxEnabled(id: string, enabled: boolean): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE mailboxes SET enabled = $2, updated_at = NOW() WHERE id = $1`,
+      [id, enabled]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async deleteMailboxIfEmpty(
+    id: string
+  ): Promise<"deleted" | "not_found" | "has_messages"> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const mailbox = await client.query<{ id: string }>(
+        "SELECT id FROM mailboxes WHERE id = $1 FOR UPDATE",
+        [id]
+      );
+      if (!mailbox.rows[0]) {
+        await client.query("ROLLBACK");
+        return "not_found";
+      }
+      const messages = await client.query<{ count: string }>(
+        "SELECT COUNT(*) AS count FROM email_messages WHERE mailbox_id = $1",
+        [id]
+      );
+      if (Number.parseInt(messages.rows[0]?.count ?? "0", 10) > 0) {
+        await client.query("ROLLBACK");
+        return "has_messages";
+      }
+      await client.query("DELETE FROM mailboxes WHERE id = $1", [id]);
+      await client.query("COMMIT");
+      return "deleted";
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async recordConnectionTest(
@@ -269,8 +352,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
       const result = await client.query(
         `INSERT INTO email_messages
            (id, mailbox_id, uid, uid_validity, message_key_hash,
-            encrypted_payload, received_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+            encrypted_payload, received_at, classification)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT DO NOTHING`,
         [
           message.id,
@@ -279,7 +362,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
           message.uidValidity,
           message.messageKeyHash,
           message.encryptedPayload,
-          message.receivedAt ?? null
+          message.receivedAt ?? null,
+          message.classification
         ]
       );
       inserted += result.rowCount ?? 0;
@@ -289,7 +373,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
 
   async listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, uid, encrypted_payload, received_at, created_at
+      `SELECT id, uid, encrypted_payload, received_at, created_at,
+              classification, match_status, matched_record_id
        FROM email_messages
        WHERE mailbox_id = $1
        ORDER BY received_at DESC NULLS LAST, created_at DESC
@@ -301,7 +386,57 @@ export class PostgresMailboxRepository implements MailboxRepository {
       uid: Number.parseInt(row.uid, 10),
       encryptedPayload: row.encrypted_payload,
       ...(row.received_at ? { receivedAt: row.received_at } : {}),
-      createdAt: row.created_at
+      createdAt: row.created_at,
+      classification: row.classification,
+      matchStatus: row.match_status,
+      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {})
     }));
+  }
+
+  async updateMessageMatch(
+    messageId: string,
+    status: MatchStatus,
+    matchedRecordId?: string
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages
+       SET match_status = $2, matched_record_id = $3
+       WHERE id = $1`,
+      [messageId, status, matchedRecordId ?? null]
+    );
+  }
+
+  async getDailySummary(since: Date): Promise<DailySummary> {
+    const result = await this.pool.query<{
+      classification: EmailClassification;
+      match_status: MatchStatus;
+      count: string;
+    }>(
+      `SELECT classification, match_status, COUNT(*) AS count
+       FROM email_messages
+       WHERE COALESCE(received_at, created_at) >= $1
+       GROUP BY classification, match_status`,
+      [since]
+    );
+    const summary: DailySummary = {
+      total: 0,
+      matched: 0,
+      unmatched: 0,
+      pending: 0,
+      classifications: {
+        creator_reply: 0,
+        automatic_reply: 0,
+        delivery_failure: 0,
+        bulk_notification: 0,
+        unknown: 0
+      }
+    };
+    for (const row of result.rows) {
+      const count = Number.parseInt(row.count, 10);
+      summary.total += count;
+      summary.classifications[row.classification] += count;
+      summary[row.match_status] += count;
+    }
+    return summary;
   }
 }

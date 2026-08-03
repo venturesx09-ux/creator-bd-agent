@@ -1,6 +1,6 @@
-# Creator BD Agent — Phase 2.0
+# Creator BD Agent — Phase 3.0
 
-这是Creator BD Agent的第二阶段后台，包含：
+这是Creator BD Agent的第三阶段后台。在第二阶段全部能力之上新增：
 
 - Render服务可以正常运行；
 - 飞书应用可以自动获取`tenant_access_token`；
@@ -12,6 +12,11 @@
 - AES-256-GCM加密邮箱凭证和邮件内容；
 - 一个或多个邮箱的IMAP连接测试与只读同步；
 - 通过IMAP UID、UIDVALIDITY和Message-ID哈希去重。
+- 每10分钟自动同步所有已启用邮箱；
+- 邮件规则分类：达人回复、自动回复、退信、批量/系统通知；
+- 读取飞书Base并按发件邮箱匹配达人记录；
+- 管理页显示过去24小时邮件与匹配概览；
+- 邮箱启用、停用以及空邮箱安全删除。
 
 本阶段只读取邮箱，不包含SMTP代码，无法发送邮件。
 
@@ -31,6 +36,9 @@
 | POST | `/api/admin/mailboxes/:mailboxId/test` | ADMIN_TOKEN | 测试IMAP连接 |
 | POST | `/api/admin/mailboxes/:mailboxId/sync` | ADMIN_TOKEN | 手动执行IMAP只读同步 |
 | GET | `/api/admin/mailboxes/:mailboxId/messages` | ADMIN_TOKEN | 查看已同步邮件摘要 |
+| PATCH | `/api/admin/mailboxes/:mailboxId/status` | ADMIN_TOKEN | 启用或停用邮箱 |
+| DELETE | `/api/admin/mailboxes/:mailboxId` | ADMIN_TOKEN | 删除没有同步记录的空邮箱 |
+| GET | `/api/admin/daily-summary` | ADMIN_TOKEN | 过去24小时分类与匹配统计 |
 | POST | `/api/test/feishu/messages` | ADMIN_TOKEN | 向测试群发送文本消息 |
 | GET | `/api/test/feishu/base/records` | ADMIN_TOKEN | 列出Base记录 |
 | PATCH | `/api/test/feishu/base/records/:recordId` | ADMIN_TOKEN | 更新指定测试记录 |
@@ -58,6 +66,7 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `DATABASE_SSL` | 否 | Render内部数据库连接填写`false` |
 | `MAILBOX_ENCRYPTION_KEY` | 是 | 独立的32字节Base64密钥；Blueprint自动生成 |
 | `MAILBOX_INITIAL_SYNC_LIMIT` | 否 | 首次同步最近多少封，默认20，最大100 |
+| `MAILBOX_SYNC_INTERVAL_MINUTES` | 否 | 自动只读同步间隔，默认10，可设置5至60 |
 | `PORT` | 否 | 默认3000；Render会自动提供 |
 
 不要保存临时`tenant_access_token`。程序会使用App ID和App Secret自动获取并缓存。
@@ -101,7 +110,7 @@ http://localhost:3000/health
 4. Render会读取根目录的`render.yaml`。
 5. Blueprint会创建`creator-bd-agent-db` PostgreSQL数据库，并通过内部网络注入`DATABASE_URL`；
 6. Blueprint会自动生成`ADMIN_TOKEN`和独立的`MAILBOX_ENCRYPTION_KEY`；
-7. 对于已经存在的Blueprint，上传2.0代码后在Render的Blueprint页面点击`Sync Blueprint`；
+7. 对于已经存在的Blueprint，上传3.0代码后在Render的Blueprint页面点击`Sync Blueprint`；
 8. 等数据库为`Available`、服务为`Live`；
 9. 打开Render生成的域名加`/health`。
 
@@ -119,7 +128,7 @@ http://localhost:3000/health
 }
 ```
 
-免费实例会休眠，首次打开管理页可能需要等待约一分钟。正式持续同步前应升级为不会休眠的实例。本阶段没有SMTP发送功能。
+免费实例会休眠，休眠期间定时任务不会运行，唤醒后会从上次IMAP UID继续同步。正式持续每10分钟同步需要升级为不会休眠的实例。本阶段没有SMTP发送功能。
 
 ## 使用邮箱管理页面
 
@@ -136,17 +145,30 @@ https://你的Render域名/admin
 5. 点击`测试IMAP`，确认连接成功；
 6. 点击`只读同步`，首次只读取最近20封邮件；
 7. 点击`查看最近邮件`检查主题、发件人和正文预览。
+8. 查看顶部“过去24小时”，确认分类和飞书匹配数量；
+9. 错误的重复邮箱可点击`停用`；若从未同步过邮件，可点击`删除`。
 
 支持两种强制加密连接：
 
 - 端口993 + SSL/TLS；
 - 端口143 + STARTTLS。
 
-系统使用IMAP只读模式打开`INBOX`，不会修改已读状态、移动或删除邮件。每次最多处理100封；如果结果显示`hasMore: true`，再次点击只读同步即可继续。
+系统使用IMAP只读模式打开`INBOX`，不会修改已读状态、移动或删除邮件。每次最多处理100封；自动任务会继续处理后续批次。邮箱停用后不会再自动或手动同步，但历史邮件仍会保留。
+
+## 第三阶段分类与飞书匹配
+
+分类使用确定性规则，不调用AI：
+
+- `达人回复`：普通外部联系人回复；
+- `自动回复`：识别Auto-Submitted、Automatic Reply、Out of Office等；
+- `退信`：识别Mailer-Daemon、Postmaster及投递失败主题；
+- `批量/通知`：识别Precedence、List-ID和no-reply等。
+
+每次同步后，程序只读取飞书Base记录，将邮件发件邮箱与Base各字段中出现的邮箱做不区分大小写的精确匹配。匹配结果仅写入本项目数据库，不会修改飞书Base。业务含义分类（感兴趣、报价、拒绝等）留到第四阶段接入AI后处理。
 
 ## 配置飞书消息接收
 
-必须先将2.0.0版代码部署到Render，再配置事件订阅。
+必须先将3.0.0版代码部署到Render，再配置事件订阅。
 
 1. 飞书开放平台进入应用，打开`权限管理`；
 2. 开通`获取群组中用户@机器人消息`（`im:message.group_at_msg:readonly`）；
@@ -255,7 +277,7 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - 确认服务器、端口和TLS方式完全匹配；
 - 部分企业邮箱会限制海外服务器IP，需要向服务商申请放行。
 
-## 第二阶段验收
+## 第三阶段验收
 
 - [ ] `npm run check`全部通过；
 - [ ] GitHub仓库为Private；
@@ -275,4 +297,10 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] 一个试点邮箱通过IMAP连接测试；
 - [ ] 能以只读模式同步最近邮件且不会修改已读状态；
 - [ ] 重复同步不会重复保存同一封邮件；
+- [ ] `/health`显示版本`3.0.0`；
+- [ ] 管理页顶部显示过去24小时摘要；
+- [ ] 邮件显示规则分类和飞书匹配状态；
+- [ ] 错误邮箱可以停用，空邮箱可以安全删除；
+- [ ] Render环境存在`MAILBOX_SYNC_INTERVAL_MINUTES=10`；
+- [ ] 已启用邮箱能够自动只读同步；
 - [ ] 未开启自动发信。

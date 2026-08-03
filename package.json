@@ -1,9 +1,9 @@
 {
   "name": "creator-bd-agent",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "Creator BD backend with Feishu and encrypted read-only IMAP mailbox management.",
+  "description": "Creator BD backend with Feishu matching and automatic encrypted read-only IMAP synchronization.",
   "engines": {
     "node": ">=22 <25"
   },

@@ -12,7 +12,7 @@ export const ADMIN_HTML = `<!doctype html>
       <div>
         <p class="eyebrow">CREATOR BD AGENT</p>
         <h1>邮箱管理</h1>
-        <p class="muted">第二阶段仅使用IMAP只读同步，不会发送邮件。</p>
+        <p class="muted">第三阶段自动只读同步、分类并匹配飞书达人，不会发送邮件。</p>
       </div>
       <span class="badge">READ ONLY</span>
     </header>
@@ -27,6 +27,14 @@ export const ADMIN_HTML = `<!doctype html>
     </section>
 
     <section id="workspace" hidden>
+      <section class="panel">
+        <div class="section-heading">
+          <div><h2>过去24小时</h2><p class="muted">规则分类与飞书达人匹配概览。</p></div>
+          <span class="badge light">AUTO SYNC</span>
+        </div>
+        <div id="summary-grid" class="summary-grid"></div>
+      </section>
+
       <section class="panel">
         <div class="section-heading">
           <div><h2>已连接邮箱</h2><p class="muted">密码不会显示，也不会写入日志。</p></div>
@@ -69,7 +77,7 @@ export const ADMIN_HTML = `<!doctype html>
 </body>
 </html>`;
 
-export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading{display:flex;gap:12px;align-items:center}.section-heading{justify-content:space-between;margin-bottom:18px}.row{margin-top:16px}.row input{flex:1}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.row{align-items:stretch;flex-direction:column}.row button{width:100%}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
+export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading{display:flex;gap:12px;align-items:center}.section-heading{justify-content:space-between;margin-bottom:18px}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.row{align-items:stretch;flex-direction:column}.row button{width:100%}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
 
 export const ADMIN_JS = `(() => {
   let adminToken = '';
@@ -117,7 +125,11 @@ export const ADMIN_JS = `(() => {
   }
 
   async function loadMailboxes() {
-    const data = await api('/api/admin/mailboxes');
+    const [data, summary] = await Promise.all([
+      api('/api/admin/mailboxes'),
+      api('/api/admin/daily-summary')
+    ]);
+    renderSummary(summary);
     const list = byId('mailbox-list');
     list.replaceChildren();
     if (!data.mailboxes.length) {
@@ -125,14 +137,14 @@ export const ADMIN_JS = `(() => {
       return;
     }
     data.mailboxes.forEach((mailbox) => {
-      const card = element('article', undefined, 'mailbox');
+      const card = element('article', undefined, 'mailbox' + (mailbox.enabled ? '' : ' disabled'));
       const top = element('div', undefined, 'mailbox-top');
       const info = element('div');
       info.append(element('h3', mailbox.label));
       info.append(element('div', mailbox.emailAddress + (mailbox.brand ? ' · ' + mailbox.brand : ''), 'meta'));
       info.append(element('div', mailbox.imapHost + ':' + mailbox.imapPort + ' · ' + mailbox.imapSecurity.toUpperCase(), 'meta'));
-      const stateText = mailbox.lastTestStatus === 'success' ? '连接正常' : mailbox.lastTestStatus === 'failed' ? '连接失败' : '未测试';
-      top.append(info, element('span', stateText, 'state ' + (mailbox.lastTestStatus || '')));
+      const stateText = !mailbox.enabled ? '已停用' : mailbox.lastTestStatus === 'success' ? '连接正常' : mailbox.lastTestStatus === 'failed' ? '连接失败' : '未测试';
+      top.append(info, element('span', stateText, 'state ' + (!mailbox.enabled ? 'disabled' : (mailbox.lastTestStatus || ''))));
       const actions = element('div', undefined, 'actions');
       actions.append(
         button('测试IMAP', async () => {
@@ -149,12 +161,49 @@ export const ADMIN_JS = `(() => {
         button('查看最近邮件', async () => {
           const result = await api('/api/admin/mailboxes/' + mailbox.id + '/messages?limit=20');
           showMessages(mailbox.id, mailbox.label, result.messages);
+        }),
+        button(mailbox.enabled ? '停用' : '启用', async () => {
+          await api('/api/admin/mailboxes/' + mailbox.id + '/status', {
+            method: 'PATCH', body: JSON.stringify({ enabled: !mailbox.enabled })
+          });
+          notify(mailbox.enabled ? '邮箱已停用' : '邮箱已启用');
+          await loadMailboxes();
+        }),
+        button('删除', async () => {
+          if (!window.confirm('仅空邮箱可以删除。确认删除这个邮箱配置？')) return;
+          await api('/api/admin/mailboxes/' + mailbox.id, { method: 'DELETE' });
+          notify('邮箱配置已删除');
+          await loadMailboxes();
         })
       );
+      actions.lastElementChild.classList.add('danger');
       card.append(top, actions);
       list.append(card);
     });
   }
+
+  function renderSummary(summary) {
+    const values = [
+      ['邮件总数', summary.total],
+      ['达人回复', summary.classifications.creator_reply],
+      ['退信/自动/通知', summary.classifications.delivery_failure + summary.classifications.automatic_reply + summary.classifications.bulk_notification],
+      ['已匹配达人', summary.matched],
+      ['未匹配', summary.unmatched],
+      ['等待匹配', summary.pending]
+    ];
+    const grid = byId('summary-grid');
+    grid.replaceChildren();
+    values.forEach(([label, value]) => {
+      const item = element('div', undefined, 'summary-item');
+      item.append(element('span', String(value), 'summary-value'), element('span', label, 'summary-label'));
+      grid.append(item);
+    });
+  }
+
+  const classificationLabels = {
+    creator_reply: '达人回复', automatic_reply: '自动回复',
+    delivery_failure: '退信', bulk_notification: '批量/通知', unknown: '未知'
+  };
 
   function showMessages(_mailboxId, label, messages) {
     byId('message-title').textContent = label + ' · 最近邮件';
@@ -164,6 +213,8 @@ export const ADMIN_JS = `(() => {
     messages.forEach((message) => {
       const card = element('article', undefined, 'message');
       card.append(element('h3', message.subject || '(无主题)'));
+      card.append(element('span', classificationLabels[message.classification] || '未知', 'pill'));
+      card.append(element('span', message.matchStatus === 'matched' ? '已匹配飞书' : message.matchStatus === 'unmatched' ? '未匹配飞书' : '等待匹配', 'pill'));
       card.append(element('p', '来自：' + (message.from.join(', ') || '未知')));
       if (message.receivedAt) card.append(element('p', new Date(message.receivedAt).toLocaleString()));
       if (message.textPreview) card.append(element('p', message.textPreview.slice(0, 500)));

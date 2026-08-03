@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { ImapFlow, type ImapFlowOptions } from "imapflow";
 import { simpleParser } from "mailparser";
 import type {
+  DailySummary,
+  EmailClassification,
   MailboxRepository,
   StoredMailbox,
   StoredMessageInput
@@ -48,12 +50,16 @@ export type MessageSummary = {
   uid: number;
   subject: string;
   from: string[];
+  fromAddresses: string[];
   to: string[];
   receivedAt?: string;
   messageId: string;
   inReplyTo?: string;
   references: string[];
   textPreview: string;
+  classification: EmailClassification;
+  matchStatus: "matched" | "unmatched" | "pending";
+  matchedRecordId?: string;
 };
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
@@ -72,6 +78,8 @@ export class MailboxServiceError extends Error {
 export interface MailboxServiceLike {
   listMailboxes(): Promise<MailboxSummary[]>;
   createMailbox(input: unknown): Promise<MailboxSummary>;
+  setMailboxEnabled(id: string, enabled: boolean): Promise<MailboxSummary>;
+  deleteMailbox(id: string): Promise<{ status: "deleted" }>;
   testConnection(id: string): Promise<{
     status: "ok";
     messagesInInbox: number;
@@ -85,6 +93,16 @@ export interface MailboxServiceLike {
     messages: MessageSummary[];
   }>;
   listMessages(id: string, limit: number): Promise<MessageSummary[]>;
+  syncAllEnabled(): Promise<{
+    attempted: number;
+    succeeded: number;
+    failed: number;
+  }>;
+  getDailySummary(): Promise<DailySummary & { since: string }>;
+}
+
+export interface CreatorMatcher {
+  matchMessages(messages: MessageSummary[]): Promise<void>;
 }
 
 type ImapFactory = (options: ImapFlowOptions) => ImapFlow;
@@ -201,6 +219,55 @@ function addresses(
     .slice(0, 50);
 }
 
+function rawAddresses(
+  values: Array<{ address?: string }> | undefined
+): string[] {
+  return [...new Set(
+    (values ?? [])
+      .map((value) => value.address?.trim().toLowerCase() ?? "")
+      .filter(Boolean)
+  )].slice(0, 50);
+}
+
+function headerValue(value: unknown): string {
+  if (typeof value === "string") return value.toLowerCase();
+  if (Array.isArray(value)) return value.join(" ").toLowerCase();
+  return value === undefined || value === null ? "" : String(value).toLowerCase();
+}
+
+export function classifyEmail(input: {
+  subject: string;
+  fromAddresses: string[];
+  autoSubmitted?: unknown;
+  precedence?: unknown;
+  listId?: unknown;
+}): EmailClassification {
+  const subject = input.subject.toLowerCase();
+  const senders = input.fromAddresses.join(" ").toLowerCase();
+  if (
+    /mailer-daemon|postmaster/u.test(senders) ||
+    /undeliverable|delivery status notification|delivery failure|returned mail|邮件投递失败|退信/u.test(subject)
+  ) {
+    return "delivery_failure";
+  }
+  const autoSubmitted = headerValue(input.autoSubmitted);
+  if (
+    (autoSubmitted && autoSubmitted !== "no") ||
+    /automatic reply|auto reply|out of office|autoreply|自动回复|外出回复/u.test(subject)
+  ) {
+    return "automatic_reply";
+  }
+  const precedence = headerValue(input.precedence);
+  if (
+    /bulk|list|junk/u.test(precedence) ||
+    Boolean(input.listId) ||
+    /(^|[._-])no-?reply@|(^|[._-])notifications?@/u.test(senders)
+  ) {
+    return "bulk_notification";
+  }
+  return input.fromAddresses.length ? "creator_reply" : "unknown";
+}
+
 function normalizedReferences(value: string | string[] | undefined): string[] {
   if (!value) {
     return [];
@@ -255,7 +322,8 @@ export class MailboxService implements MailboxServiceLike {
     private readonly repository: MailboxRepository,
     private readonly secretBox: SecretBox,
     private readonly initialSyncLimit: number,
-    private readonly imapFactory: ImapFactory = (options) => new ImapFlow(options)
+    private readonly imapFactory: ImapFactory = (options) => new ImapFlow(options),
+    private readonly creatorMatcher?: CreatorMatcher
   ) {}
 
   async listMailboxes(): Promise<MailboxSummary[]> {
@@ -273,6 +341,30 @@ export class MailboxService implements MailboxServiceLike {
       encryptedConfig: this.secretBox.encrypt(connection)
     });
     return this.toSummary(row);
+  }
+
+  async setMailboxEnabled(id: string, enabled: boolean): Promise<MailboxSummary> {
+    await this.requireMailbox(id);
+    const updated = await this.repository.setMailboxEnabled(id, enabled);
+    if (!updated) {
+      throw new MailboxServiceError("Mailbox not found", 404, "MAILBOX_NOT_FOUND");
+    }
+    return this.toSummary(await this.requireMailbox(id));
+  }
+
+  async deleteMailbox(id: string): Promise<{ status: "deleted" }> {
+    const result = await this.repository.deleteMailboxIfEmpty(id);
+    if (result === "not_found") {
+      throw new MailboxServiceError("Mailbox not found", 404, "MAILBOX_NOT_FOUND");
+    }
+    if (result === "has_messages") {
+      throw new MailboxServiceError(
+        "This mailbox contains synced messages. Disable it instead of deleting it.",
+        409,
+        "MAILBOX_HAS_MESSAGES"
+      );
+    }
+    return { status: "deleted" };
   }
 
   async testConnection(id: string): Promise<{
@@ -320,6 +412,9 @@ export class MailboxService implements MailboxServiceLike {
     messages: MessageSummary[];
   }> {
     const row = await this.requireMailbox(id);
+    if (!row.enabled) {
+      throw new MailboxServiceError("Mailbox is disabled", 409, "MAILBOX_DISABLED");
+    }
     const config = this.connectionConfig(row);
     const client = this.createImapClient(config);
     try {
@@ -393,6 +488,7 @@ export class MailboxService implements MailboxServiceLike {
           const payload: EncryptedMessagePayload = {
             subject: item.envelope?.subject || parsed?.subject || "(无主题)",
             from: addresses(item.envelope?.from),
+            fromAddresses: rawAddresses(item.envelope?.from),
             to: addresses(item.envelope?.to),
             ...(receivedAt && !Number.isNaN(receivedAt.getTime())
               ? { receivedAt: receivedAt.toISOString() }
@@ -400,7 +496,15 @@ export class MailboxService implements MailboxServiceLike {
             messageId,
             ...(inReplyTo ? { inReplyTo } : {}),
             references: normalizedReferences(parsed?.references),
-            textPreview: safePreview(parsed?.text)
+            textPreview: safePreview(parsed?.text),
+            classification: classifyEmail({
+              subject: item.envelope?.subject || parsed?.subject || "(无主题)",
+              fromAddresses: rawAddresses(item.envelope?.from),
+              autoSubmitted: parsed?.headers.get("auto-submitted"),
+              precedence: parsed?.headers.get("precedence"),
+              listId: parsed?.headers.get("list-id")
+            }),
+            matchStatus: "pending"
           };
           const summary: MessageSummary = {
             id: randomUUID(),
@@ -416,6 +520,7 @@ export class MailboxService implements MailboxServiceLike {
               .update(messageId.trim().toLowerCase())
               .digest("hex"),
             encryptedPayload: this.secretBox.encrypt(payload),
+            classification: payload.classification,
             ...(receivedAt && !Number.isNaN(receivedAt.getTime())
               ? { receivedAt }
               : {})
@@ -428,6 +533,9 @@ export class MailboxService implements MailboxServiceLike {
           uidValidity,
           lastUid: endUid
         });
+        if (this.creatorMatcher && messages.length) {
+          await this.creatorMatcher.matchMessages(messages).catch(() => undefined);
+        }
         return {
           status: "ok",
           fetched: fetched.length,
@@ -455,11 +563,45 @@ export class MailboxService implements MailboxServiceLike {
   async listMessages(id: string, limit: number): Promise<MessageSummary[]> {
     await this.requireMailbox(id);
     const rows = await this.repository.listMessages(id, limit);
-    return rows.map((row) => ({
-      id: row.id,
-      uid: row.uid,
-      ...this.secretBox.decrypt<EncryptedMessagePayload>(row.encryptedPayload)
-    }));
+    return rows.map((row) => {
+      const payload = this.secretBox.decrypt<EncryptedMessagePayload>(row.encryptedPayload);
+      return {
+        id: row.id,
+        uid: row.uid,
+        ...payload,
+        classification: row.classification,
+        matchStatus: row.matchStatus,
+        ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {})
+      };
+    });
+  }
+
+  async syncAllEnabled(): Promise<{
+    attempted: number;
+    succeeded: number;
+    failed: number;
+  }> {
+    const mailboxes = (await this.repository.listMailboxes()).filter((row) => row.enabled);
+    let succeeded = 0;
+    let failed = 0;
+    for (const mailbox of mailboxes) {
+      try {
+        let hasMore = true;
+        while (hasMore) {
+          const result = await this.syncMailbox(mailbox.id);
+          hasMore = result.hasMore;
+        }
+        succeeded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { attempted: mailboxes.length, succeeded, failed };
+  }
+
+  async getDailySummary(): Promise<DailySummary & { since: string }> {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+    return { ...(await this.repository.getDailySummary(since)), since: since.toISOString() };
   }
 
   private async requireMailbox(id: string): Promise<StoredMailbox> {

@@ -12,6 +12,9 @@
 - IMAP connections enforce TLS on port 993 or STARTTLS on port 143 and open the inbox read-only.
 - The admin page keeps `ADMIN_TOKEN` in page memory only and does not persist it in browser storage.
 - The current phase does not expose SMTP code and cannot send email.
+- Automatic synchronization runs sequentially, skips disabled mailboxes, and prevents overlapping scheduled runs.
+- Mailbox deletion is refused when synchronized messages exist; disable the mailbox to preserve history.
+- Creator matching reads Feishu Base records but does not update Base records.
 - Do not expose the test endpoints through a public frontend.
 - Review Render logs before sharing them and redact tokens, email addresses, and internal identifiers.
 - Review database backups and access controls before storing production email data.

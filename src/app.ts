@@ -133,7 +133,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "2.0.0",
+      version: "3.0.0",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -215,6 +215,65 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const result = await requireMailboxService().testConnection(mailboxId);
         response.status(200).json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.patch(
+    "/api/admin/mailboxes/:mailboxId/status",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({ error: "invalid_request", message: "mailboxId is invalid" });
+          return;
+        }
+        const body = request.body as unknown;
+        if (!isPlainObject(body) || typeof body.enabled !== "boolean") {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "Request body must be { enabled: boolean }"
+          });
+          return;
+        }
+        const mailbox = await requireMailboxService().setMailboxEnabled(
+          mailboxId,
+          body.enabled
+        );
+        response.status(200).json({ mailbox });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.delete(
+    "/api/admin/mailboxes/:mailboxId",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({ error: "invalid_request", message: "mailboxId is invalid" });
+          return;
+        }
+        const result = await requireMailboxService().deleteMailbox(mailboxId);
+        response.status(200).json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/daily-summary",
+    adminOnly,
+    async (_request, response, next) => {
+      try {
+        response.status(200).json(await requireMailboxService().getDailySummary());
       } catch (error) {
         next(error);
       }

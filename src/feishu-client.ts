@@ -21,6 +21,11 @@ type FeishuEnvelope = {
   };
 };
 
+export type FeishuBaseRecord = {
+  record_id: string;
+  fields: Record<string, unknown>;
+};
+
 export class FeishuApiError extends Error {
   constructor(
     message: string,
@@ -80,6 +85,29 @@ export class FeishuClient {
         `/tables/${encodeURIComponent(this.config.baseTableId)}/records?${params}`,
       { method: "GET" }
     );
+  }
+
+  async listAllBaseRecords(): Promise<FeishuBaseRecord[]> {
+    const records: FeishuBaseRecord[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < 50; page += 1) {
+      const response = await this.listBaseRecords({
+        pageSize: 100,
+        ...(pageToken ? { pageToken } : {})
+      }) as {
+        data?: {
+          items?: FeishuBaseRecord[];
+          has_more?: boolean;
+          page_token?: string;
+        };
+      };
+      records.push(...(response.data?.items ?? []));
+      if (!response.data?.has_more || !response.data.page_token) {
+        return records;
+      }
+      pageToken = response.data.page_token;
+    }
+    throw new FeishuApiError("Feishu Base pagination exceeded safe limit", 502);
   }
 
   async updateBaseRecord(
