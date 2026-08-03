@@ -614,7 +614,7 @@ export class MailboxService implements MailboxServiceLike {
       references: payload.references ?? [],
       textPreview: payload.textPreview ?? "",
       classification: row.classification,
-      matchStatus: row.matchStatus,
+      matchStatus: row.baseSyncStatus === "synced" ? row.matchStatus : "pending",
       ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {})
     };
   }
@@ -639,18 +639,18 @@ export class MailboxService implements MailboxServiceLike {
     }
     const candidates = messagesNeedingMatch(messages);
     if (this.creatorMatcher && candidates.length) {
-      await this.creatorMatcher.matchMessages(candidates).catch(() => undefined);
+      await this.creatorMatcher.matchMessages(candidates);
     }
   }
 
   private scheduleReprocess(mailboxId: string): void {
     if (this.reprocessJobs.has(mailboxId)) return;
     const job = this.reprocessStoredMessages(mailboxId)
-      .catch(() => {
+      .catch((error: unknown) => {
         console.error(JSON.stringify({
           event: "mailbox_background_match_failed",
           mailboxId,
-          message: "Internal error"
+          message: error instanceof Error ? error.message : "Internal error"
         }));
       })
       .finally(() => {

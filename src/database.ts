@@ -37,6 +37,7 @@ export type EmailClassification =
   | "unknown";
 
 export type MatchStatus = "matched" | "unmatched" | "pending";
+export type BaseSyncStatus = "pending" | "synced";
 
 export type StoredMessage = {
   id: string;
@@ -47,6 +48,7 @@ export type StoredMessage = {
   classification: EmailClassification;
   matchStatus: MatchStatus;
   matchedRecordId?: string;
+  baseSyncStatus: BaseSyncStatus;
 };
 
 export type DailySummary = {
@@ -125,6 +127,7 @@ type MessageRow = {
   classification: EmailClassification;
   match_status: MatchStatus;
   matched_record_id: string | null;
+  base_sync_status: BaseSyncStatus;
 };
 
 function mailboxFromRow(row: MailboxRow): StoredMailbox {
@@ -203,7 +206,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
       ALTER TABLE email_messages
         ADD COLUMN IF NOT EXISTS classification VARCHAR(40) NOT NULL DEFAULT 'unknown',
         ADD COLUMN IF NOT EXISTS match_status VARCHAR(20) NOT NULL DEFAULT 'pending',
-        ADD COLUMN IF NOT EXISTS matched_record_id VARCHAR(128)
+        ADD COLUMN IF NOT EXISTS matched_record_id VARCHAR(128),
+        ADD COLUMN IF NOT EXISTS base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
     `);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
@@ -382,7 +386,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
   async listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
-              classification, match_status, matched_record_id
+              classification, match_status, matched_record_id, base_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
        ORDER BY received_at DESC NULLS LAST, created_at DESC
@@ -397,7 +401,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
       createdAt: row.created_at,
       classification: row.classification,
       matchStatus: row.match_status,
-      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {})
+      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
+      baseSyncStatus: row.base_sync_status
     }));
   }
 
@@ -407,10 +412,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
   ): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
-              classification, match_status, matched_record_id
+              classification, match_status, matched_record_id, base_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
-         AND (classification = 'unknown' OR match_status <> 'matched')
+         AND (classification = 'unknown' OR match_status <> 'matched'
+              OR base_sync_status <> 'synced')
        ORDER BY received_at DESC NULLS LAST, created_at DESC
        LIMIT $2`,
       [mailboxId, limit]
@@ -423,7 +429,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
       createdAt: row.created_at,
       classification: row.classification,
       matchStatus: row.match_status,
-      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {})
+      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
+      baseSyncStatus: row.base_sync_status
     }));
   }
 
@@ -444,7 +451,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
   ): Promise<void> {
     await this.pool.query(
       `UPDATE email_messages
-       SET match_status = $2, matched_record_id = $3
+       SET match_status = $2, matched_record_id = $3,
+           base_sync_status = CASE WHEN $2 = 'matched' THEN 'synced' ELSE 'pending' END
        WHERE id = $1`,
       [messageId, status, matchedRecordId ?? null]
     );
