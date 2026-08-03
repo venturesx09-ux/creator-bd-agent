@@ -62,9 +62,9 @@ function parseSyncLimit(raw: string | undefined): number {
 }
 
 function parseSyncInterval(raw: string | undefined): number {
-  const minutes = Number.parseInt(raw ?? "10", 10);
-  if (!Number.isInteger(minutes) || minutes < 5 || minutes > 60) {
-    throw new Error("MAILBOX_SYNC_INTERVAL_MINUTES must be between 5 and 60");
+  const minutes = Number.parseInt(raw ?? "2", 10);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) {
+    throw new Error("MAILBOX_SYNC_INTERVAL_MINUTES must be between 1 and 60");
   }
   return minutes;
 }

@@ -59,6 +59,13 @@ export type DailySummary = {
   classifications: Record<EmailClassification, number>;
 };
 
+export type FeishuEmailIndexEntry = {
+  emailHash: string;
+  recordId: string;
+  cooperationStage: string;
+  lastContactAt?: number;
+};
+
 export interface MailboxRepository {
   initialize(): Promise<void>;
   close(): Promise<void>;
@@ -86,6 +93,11 @@ export interface MailboxRepository {
     errorCode?: string;
   }): Promise<number>;
   listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]>;
+  listKnownUids(
+    mailboxId: string,
+    uidValidity: string,
+    uids: number[]
+  ): Promise<Set<number>>;
   listMessagesNeedingProcessing(
     mailboxId: string,
     limit: number
@@ -98,6 +110,16 @@ export interface MailboxRepository {
     messageId: string,
     status: MatchStatus,
     matchedRecordId?: string
+  ): Promise<void>;
+  loadFeishuEmailIndex(): Promise<{
+    entries: FeishuEmailIndexEntry[];
+    refreshedAt?: Date;
+  }>;
+  replaceFeishuEmailIndex(entries: FeishuEmailIndexEntry[]): Promise<void>;
+  updateFeishuIndexRecord(
+    recordId: string,
+    cooperationStage: string,
+    lastContactAt?: number
   ): Promise<void>;
   getDailySummary(since: Date): Promise<DailySummary>;
 }
@@ -212,6 +234,19 @@ export class PostgresMailboxRepository implements MailboxRepository {
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
       ON email_messages (received_at DESC, classification, match_status)
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS feishu_email_index (
+        email_hash CHAR(64) PRIMARY KEY,
+        record_id VARCHAR(128) NOT NULL,
+        cooperation_stage TEXT NOT NULL DEFAULT '',
+        last_contact_at BIGINT,
+        refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS feishu_email_index_record_idx
+      ON feishu_email_index (record_id)
     `);
     await this.pool.query("SELECT 1");
   }
@@ -404,6 +439,99 @@ export class PostgresMailboxRepository implements MailboxRepository {
       ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
       baseSyncStatus: row.base_sync_status
     }));
+  }
+
+  async listKnownUids(
+    mailboxId: string,
+    uidValidity: string,
+    uids: number[]
+  ): Promise<Set<number>> {
+    if (!uids.length) return new Set();
+    const result = await this.pool.query<{ uid: string }>(
+      `SELECT uid FROM email_messages
+       WHERE mailbox_id = $1 AND uid_validity = $2
+         AND uid = ANY($3::bigint[])`,
+      [mailboxId, uidValidity, uids]
+    );
+    return new Set(result.rows.map((row) => Number.parseInt(row.uid, 10)));
+  }
+
+  async loadFeishuEmailIndex(): Promise<{
+    entries: FeishuEmailIndexEntry[];
+    refreshedAt?: Date;
+  }> {
+    const result = await this.pool.query<{
+      email_hash: string;
+      record_id: string;
+      cooperation_stage: string;
+      last_contact_at: string | null;
+      refreshed_at: Date;
+    }>(`SELECT email_hash, record_id, cooperation_stage, last_contact_at, refreshed_at
+        FROM feishu_email_index`);
+    const refreshedAt = result.rows.reduce<Date | undefined>(
+      (latest, row) => !latest || row.refreshed_at > latest ? row.refreshed_at : latest,
+      undefined
+    );
+    return {
+      entries: result.rows.map((row) => ({
+        emailHash: row.email_hash,
+        recordId: row.record_id,
+        cooperationStage: row.cooperation_stage,
+        ...(row.last_contact_at
+          ? { lastContactAt: Number.parseInt(row.last_contact_at, 10) }
+          : {})
+      })),
+      ...(refreshedAt ? { refreshedAt } : {})
+    };
+  }
+
+  async replaceFeishuEmailIndex(entries: FeishuEmailIndexEntry[]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM feishu_email_index");
+      for (let offset = 0; offset < entries.length; offset += 500) {
+        const batch = entries.slice(offset, offset + 500);
+        if (!batch.length) continue;
+        const values: unknown[] = [];
+        const placeholders = batch.map((entry, index) => {
+          const base = index * 4;
+          values.push(
+            entry.emailHash,
+            entry.recordId,
+            entry.cooperationStage,
+            entry.lastContactAt ?? null
+          );
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+        });
+        await client.query(
+          `INSERT INTO feishu_email_index
+            (email_hash, record_id, cooperation_stage, last_contact_at)
+           VALUES ${placeholders.join(",")}`,
+          values
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateFeishuIndexRecord(
+    recordId: string,
+    cooperationStage: string,
+    lastContactAt?: number
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE feishu_email_index
+       SET cooperation_stage = $2,
+           last_contact_at = COALESCE($3, last_contact_at)
+       WHERE record_id = $1`,
+      [recordId, cooperationStage, lastContactAt ?? null]
+    );
   }
 
   async listMessagesNeedingProcessing(

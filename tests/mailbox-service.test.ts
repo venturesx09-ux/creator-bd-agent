@@ -8,6 +8,7 @@ import type {
 } from "../src/database.js";
 import {
   classifyEmail,
+  mergeSyncUids,
   messagesNeedingMatch,
   MailboxService,
   MailboxServiceError,
@@ -65,9 +66,13 @@ class MemoryRepository implements MailboxRepository {
   async listMessages(_mailboxId: string, _limit: number): Promise<StoredMessage[]> {
     return [];
   }
+  async listKnownUids(): Promise<Set<number>> { return new Set(); }
   async listMessagesNeedingProcessing(): Promise<StoredMessage[]> { return []; }
   async updateMessageClassification(): Promise<void> {}
   async updateMessageMatch(): Promise<void> {}
+  async loadFeishuEmailIndex() { return { entries: [] }; }
+  async replaceFeishuEmailIndex(): Promise<void> {}
+  async updateFeishuIndexRecord(): Promise<void> {}
   async getDailySummary() {
     return {
       total: 0, matched: 0, unmatched: 0, pending: 0,
@@ -167,5 +172,14 @@ describe("email rematching", () => {
       { ...base, id: "matched", matchStatus: "matched" }
     ]);
     assert.deepEqual(result.map((message) => message.id), ["pending", "unmatched"]);
+  });
+});
+
+describe("unread backfill", () => {
+  it("adds missing unseen UIDs without refetching stored messages", () => {
+    assert.deepEqual(
+      mergeSyncUids([101, 102], [20, 21, 101], new Set([20])),
+      [21, 101, 102]
+    );
   });
 });

@@ -12,6 +12,7 @@ import { SecretBox } from "./secret-box.js";
 
 const MAX_SOURCE_BYTES = 256 * 1024;
 const SYNC_BATCH_SIZE = 100;
+const UNREAD_BACKFILL_LIMIT = 200;
 const BACKFILL_BATCH_SIZE = 500;
 const EMAIL_ADDRESS_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}/giu;
 
@@ -113,6 +114,17 @@ export interface MailboxServiceLike {
 
 export interface CreatorMatcher {
   matchMessages(messages: MessageSummary[]): Promise<void>;
+}
+
+export function mergeSyncUids(
+  incrementalUids: number[],
+  unseenUids: number[],
+  knownUnseenUids: ReadonlySet<number>
+): number[] {
+  return [...new Set([
+    ...incrementalUids,
+    ...unseenUids.filter((uid) => !knownUnseenUids.has(uid))
+  ])].sort((left, right) => left - right);
 }
 
 type ImapFactory = (options: ImapFlowOptions) => ImapFlow;
@@ -345,6 +357,7 @@ function imapError(error: unknown, fallbackCode: string): MailboxServiceError {
 
 export class MailboxService implements MailboxServiceLike {
   private readonly reprocessJobs = new Map<string, Promise<void>>();
+  private readonly reprocessAgain = new Set<string>();
 
   constructor(
     private readonly repository: MailboxRepository,
@@ -463,7 +476,34 @@ export class MailboxService implements MailboxServiceLike {
           ? row.lastUid + 1
           : Math.max(1, mailbox.uidNext - this.initialSyncLimit);
 
-        if (startUid > highestUid) {
+        const endUid = startUid <= highestUid
+          ? Math.min(highestUid, startUid + SYNC_BATCH_SIZE - 1)
+          : undefined;
+        const incrementalUids = endUid === undefined
+          ? []
+          : Array.from(
+              { length: endUid - startUid + 1 },
+              (_, index) => startUid + index
+            );
+        const unseenSearch = await client.search(
+          { seen: false },
+          { uid: true }
+        );
+        const unseenUids = (unseenSearch === false ? [] : unseenSearch)
+          .filter((uid) => Number.isSafeInteger(uid) && uid > 0)
+          .slice(-UNREAD_BACKFILL_LIMIT);
+        const knownUnseenUids = await this.repository.listKnownUids(
+          id,
+          uidValidity,
+          unseenUids
+        );
+        const syncUids = mergeSyncUids(
+          incrementalUids,
+          unseenUids,
+          knownUnseenUids
+        );
+
+        if (syncUids.length === 0) {
           await this.repository.saveMessagesAndCursor({
             mailboxId: id,
             messages: [],
@@ -480,9 +520,8 @@ export class MailboxService implements MailboxServiceLike {
           };
         }
 
-        const endUid = Math.min(highestUid, startUid + SYNC_BATCH_SIZE - 1);
         const fetched = await client.fetchAll(
-          `${startUid}:${endUid}`,
+          syncUids.join(","),
           {
             uid: true,
             envelope: true,
@@ -560,14 +599,14 @@ export class MailboxService implements MailboxServiceLike {
           mailboxId: id,
           messages: stored,
           uidValidity,
-          lastUid: endUid
+          lastUid: endUid ?? highestUid
         });
         this.scheduleReprocess(id);
         return {
           status: "ok",
           fetched: fetched.length,
           inserted,
-          hasMore: endUid < highestUid,
+          hasMore: endUid !== undefined && endUid < highestUid,
           messages
         };
       } finally {
@@ -644,7 +683,10 @@ export class MailboxService implements MailboxServiceLike {
   }
 
   private scheduleReprocess(mailboxId: string): void {
-    if (this.reprocessJobs.has(mailboxId)) return;
+    if (this.reprocessJobs.has(mailboxId)) {
+      this.reprocessAgain.add(mailboxId);
+      return;
+    }
     const job = this.reprocessStoredMessages(mailboxId)
       .catch((error: unknown) => {
         console.error(JSON.stringify({
@@ -655,6 +697,9 @@ export class MailboxService implements MailboxServiceLike {
       })
       .finally(() => {
         this.reprocessJobs.delete(mailboxId);
+        if (this.reprocessAgain.delete(mailboxId)) {
+          this.scheduleReprocess(mailboxId);
+        }
       });
     this.reprocessJobs.set(mailboxId, job);
   }

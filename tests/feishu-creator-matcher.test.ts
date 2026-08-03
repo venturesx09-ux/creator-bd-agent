@@ -26,6 +26,9 @@ describe("Feishu creator matching", () => {
     const updates: Array<{ id: string; status: MatchStatus; recordId?: string }> = [];
     const baseUpdates: Array<{ recordId: string; fields: Record<string, unknown> }> = [];
     const repository = {
+      loadFeishuEmailIndex: async () => ({ entries: [] }),
+      replaceFeishuEmailIndex: async () => undefined,
+      updateFeishuIndexRecord: async () => undefined,
       updateMessageMatch: async (id: string, status: MatchStatus, recordId?: string) => {
         updates.push({ id, status, ...(recordId ? { recordId } : {}) });
       }

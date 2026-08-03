@@ -32,7 +32,7 @@ services:
       - key: MAILBOX_INITIAL_SYNC_LIMIT
         value: "20"
       - key: MAILBOX_SYNC_INTERVAL_MINUTES
-        value: "10"
+        value: "2"
 
 databases:
   - name: creator-bd-agent-db

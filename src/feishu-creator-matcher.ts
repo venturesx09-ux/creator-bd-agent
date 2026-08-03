@@ -1,8 +1,17 @@
-import type { MailboxRepository } from "./database.js";
+import { createHash } from "node:crypto";
+import type {
+  FeishuEmailIndexEntry,
+  MailboxRepository
+} from "./database.js";
 import { FeishuClient, type FeishuBaseRecord } from "./feishu-client.js";
 import type { CreatorMatcher, MessageSummary } from "./mailbox-service.js";
 
 const EMAIL_PATTERN_SOURCE = "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}";
+const INDEX_FRESHNESS_MS = 30 * 60_000;
+
+function emailHash(email: string): string {
+  return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
+}
 
 export function buildCreatorEmailIndex(
   records: FeishuBaseRecord[]
@@ -29,6 +38,35 @@ function buildCreatorRecordIndex(
     }
   }
   return recordIndex;
+}
+
+function persistentEntries(records: FeishuBaseRecord[]): FeishuEmailIndexEntry[] {
+  return [...buildCreatorRecordIndex(records)].map(([email, record]) => {
+    const lastContactAt = currentTimestamp(record.fields["最后联系时间"]);
+    return {
+      emailHash: emailHash(email),
+      recordId: record.record_id,
+      cooperationStage: currentStage(record.fields),
+      ...(lastContactAt !== undefined ? { lastContactAt } : {})
+    };
+  });
+}
+
+function indexFromPersistentEntries(
+  entries: FeishuEmailIndexEntry[]
+): Map<string, FeishuBaseRecord> {
+  return new Map(entries.map((entry) => [
+    entry.emailHash,
+    {
+      record_id: entry.recordId,
+      fields: {
+        "合作阶段": entry.cooperationStage,
+        ...(entry.lastContactAt !== undefined
+          ? { "最后联系时间": entry.lastContactAt }
+          : {})
+      }
+    }
+  ]));
 }
 
 const PRE_REPLY_STAGES = new Set(["", "待触达", "已触达"]);
@@ -105,7 +143,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
     );
     for (const message of orderedMessages) {
       const matchedRecord = message.fromAddresses
-        .map((email) => index.get(email.toLowerCase()))
+        .map((email) => index.get(emailHash(email)))
         .find(Boolean);
       if (matchedRecord) {
         const fields = baseFieldsForMessage(message, matchedRecord);
@@ -114,6 +152,11 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
           fields
         );
         Object.assign(matchedRecord.fields, fields);
+        await this.repository.updateFeishuIndexRecord(
+          matchedRecord.record_id,
+          currentStage(matchedRecord.fields),
+          currentTimestamp(matchedRecord.fields["最后联系时间"])
+        );
         await this.repository.updateMessageMatch(
           message.id,
           "matched",
@@ -134,16 +177,44 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       return this.cachedIndex.value;
     }
     if (this.indexRequest) return this.indexRequest;
-    this.indexRequest = this.feishuClient
-      .listAllBaseRecords()
-      .then((records) => {
-        const value = buildCreatorRecordIndex(records);
-        this.cachedIndex = { value, expiresAt: Date.now() + 10 * 60_000 };
-        return value;
-      })
-      .finally(() => {
-        this.indexRequest = undefined;
-      });
+    this.indexRequest = this.loadOrRefreshIndex().finally(() => {
+      this.indexRequest = undefined;
+    });
     return this.indexRequest;
+  }
+
+  private async loadOrRefreshIndex(): Promise<Map<string, FeishuBaseRecord>> {
+    const stored = await this.repository.loadFeishuEmailIndex();
+    if (stored.entries.length) {
+      const value = indexFromPersistentEntries(stored.entries);
+      const age = stored.refreshedAt
+        ? Date.now() - stored.refreshedAt.getTime()
+        : Number.POSITIVE_INFINITY;
+      this.cachedIndex = {
+        value,
+        expiresAt: Date.now() + (age < INDEX_FRESHNESS_MS
+          ? INDEX_FRESHNESS_MS - age
+          : 5 * 60_000)
+      };
+      if (age >= INDEX_FRESHNESS_MS) {
+        void this.refreshIndex().catch((error: unknown) => {
+          console.error(JSON.stringify({
+            event: "feishu_index_refresh_failed",
+            message: error instanceof Error ? error.message : "Internal error"
+          }));
+        });
+      }
+      return value;
+    }
+    return this.refreshIndex();
+  }
+
+  private async refreshIndex(): Promise<Map<string, FeishuBaseRecord>> {
+    const records = await this.feishuClient.listAllBaseRecords();
+    const entries = persistentEntries(records);
+    await this.repository.replaceFeishuEmailIndex(entries);
+    const value = indexFromPersistentEntries(entries);
+    this.cachedIndex = { value, expiresAt: Date.now() + INDEX_FRESHNESS_MS };
+    return value;
   }
 }

@@ -146,6 +146,9 @@ describe("mailbox admin", () => {
       String(response.headers["content-security-policy"]),
       /default-src 'self'/u
     );
+    assert.match(response.text, /全部同步/u);
+    assert.match(response.text, /刷新概览/u);
+    assert.match(ADMIN_JS, /sessionStorage/u);
     assert.doesNotThrow(() => new Function(ADMIN_JS));
   });
 

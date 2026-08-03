@@ -19,7 +19,7 @@ export const ADMIN_HTML = `<!doctype html>
 
     <section class="panel" id="login-panel">
       <h2>管理员验证</h2>
-      <p class="muted">输入Render中的ADMIN_TOKEN。Token只保存在当前页面内存，刷新后清除。</p>
+      <p class="muted">输入Render中的ADMIN_TOKEN。Token仅保存在当前浏览器标签会话中，页面刷新后仍可继续使用，关闭标签后清除。</p>
       <div class="row">
         <input id="admin-token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
         <button id="connect-button" type="button">进入管理</button>
@@ -30,7 +30,7 @@ export const ADMIN_HTML = `<!doctype html>
       <section class="panel">
         <div class="section-heading">
           <div><h2>过去24小时</h2><p class="muted">规则分类与飞书达人匹配概览。</p></div>
-          <span class="badge light">AUTO SYNC</span>
+          <div class="heading-actions"><button id="refresh-summary" class="secondary" type="button">刷新概览</button><button id="logout-button" class="secondary" type="button">退出</button><span class="badge light">AUTO SYNC</span></div>
         </div>
         <div id="summary-grid" class="summary-grid"></div>
       </section>
@@ -38,7 +38,12 @@ export const ADMIN_HTML = `<!doctype html>
       <section class="panel">
         <div class="section-heading">
           <div><h2>已连接邮箱</h2><p class="muted">密码不会显示，也不会写入日志。</p></div>
-          <button id="refresh-button" class="secondary" type="button">刷新</button>
+          <div class="heading-actions"><button id="sync-all-button" type="button">全部同步</button><button id="refresh-button" class="secondary" type="button">刷新邮箱</button></div>
+        </div>
+        <div id="sync-progress" class="progress-panel" hidden>
+          <div class="progress-line"><strong id="sync-progress-text">准备同步</strong><span id="sync-progress-value">0%</span></div>
+          <progress id="sync-progress-bar" value="0" max="100"></progress>
+          <p class="muted">这里显示邮箱读取进度；飞书匹配和写回会在后台继续执行。</p>
         </div>
         <div id="mailbox-list" class="cards"></div>
       </section>
@@ -65,7 +70,7 @@ export const ADMIN_HTML = `<!doctype html>
       <section class="panel" id="message-panel" hidden>
         <div class="section-heading">
           <div><h2 id="message-title">最近邮件</h2><p class="muted">只显示已同步并加密保存的邮件摘要。</p></div>
-          <button id="close-messages" class="secondary" type="button">关闭</button>
+          <div class="heading-actions"><button id="refresh-messages" class="secondary" type="button">刷新邮件</button><button id="close-messages" class="secondary" type="button">关闭</button></div>
         </div>
         <div id="message-list" class="messages"></div>
       </section>
@@ -77,10 +82,13 @@ export const ADMIN_HTML = `<!doctype html>
 </body>
 </html>`;
 
-export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading{display:flex;gap:12px;align-items:center}.section-heading{justify-content:space-between;margin-bottom:18px}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.row{align-items:stretch;flex-direction:column}.row button{width:100%}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
+export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading,.heading-actions,.progress-line{display:flex;gap:12px;align-items:center}.section-heading,.progress-line{justify-content:space-between}.section-heading{margin-bottom:18px}.heading-actions{flex-wrap:wrap;justify-content:flex-end}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.progress-panel{background:#f7f7f4;border:1px solid #e8e8e3;border-radius:12px;padding:14px;margin-bottom:16px}.progress-panel progress{width:100%;height:12px;margin:10px 0 6px;accent-color:#147a39}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.row,.section-heading{align-items:stretch;flex-direction:column}.row button{width:100%}.heading-actions{justify-content:flex-start}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
 
 export const ADMIN_JS = `(() => {
-  let adminToken = '';
+  const tokenStorageKey = 'creator-bd-agent-admin-token';
+  let adminToken = window.sessionStorage.getItem(tokenStorageKey) || '';
+  let currentMailboxes = [];
+  let currentMessageMailbox = null;
   const byId = (id) => document.getElementById(id);
   const status = byId('status');
 
@@ -101,6 +109,12 @@ export const ADMIN_JS = `(() => {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        window.sessionStorage.removeItem(tokenStorageKey);
+        adminToken = '';
+        byId('workspace').hidden = true;
+        byId('login-panel').hidden = false;
+      }
       throw new Error(data.message || data.error || '请求失败');
     }
     return data;
@@ -130,6 +144,7 @@ export const ADMIN_JS = `(() => {
       api('/api/admin/daily-summary')
     ]);
     renderSummary(summary);
+    currentMailboxes = data.mailboxes;
     const list = byId('mailbox-list');
     list.replaceChildren();
     if (!data.mailboxes.length) {
@@ -155,13 +170,11 @@ export const ADMIN_JS = `(() => {
         button('只读同步', async () => {
           const result = await api('/api/admin/mailboxes/' + mailbox.id + '/sync', { method: 'POST' });
           notify('同步完成：读取 ' + result.fetched + '，新增 ' + result.inserted + '。飞书匹配正在后台进行，请稍后刷新');
-          const recent = await api('/api/admin/mailboxes/' + mailbox.id + '/messages?limit=20');
-          showMessages(mailbox.id, mailbox.label, recent.messages);
+          await loadMessages(mailbox.id, mailbox.label);
           await loadMailboxes();
         }),
         button('查看最近邮件', async () => {
-          const result = await api('/api/admin/mailboxes/' + mailbox.id + '/messages?limit=20');
-          showMessages(mailbox.id, mailbox.label, result.messages);
+          await loadMessages(mailbox.id, mailbox.label);
         }),
         button(mailbox.enabled ? '停用' : '启用', async () => {
           await api('/api/admin/mailboxes/' + mailbox.id + '/status', {
@@ -181,6 +194,49 @@ export const ADMIN_JS = `(() => {
       card.append(top, actions);
       list.append(card);
     });
+  }
+
+  async function loadSummary() {
+    renderSummary(await api('/api/admin/daily-summary'));
+  }
+
+  async function loadMessages(mailboxId, label) {
+    const result = await api('/api/admin/mailboxes/' + mailboxId + '/messages?limit=100');
+    currentMessageMailbox = { id: mailboxId, label: label };
+    showMessages(mailboxId, label, result.messages);
+  }
+
+  function updateProgress(done, total, message) {
+    const percentage = total ? Math.round(done * 100 / total) : 100;
+    byId('sync-progress').hidden = false;
+    byId('sync-progress-bar').value = percentage;
+    byId('sync-progress-value').textContent = percentage + '%';
+    byId('sync-progress-text').textContent = message;
+  }
+
+  async function syncAllMailboxes() {
+    const enabled = currentMailboxes.filter((mailbox) => mailbox.enabled);
+    if (!enabled.length) return notify('没有已启用邮箱', true);
+    let succeeded = 0;
+    let failed = 0;
+    updateProgress(0, enabled.length, '准备同步 ' + enabled.length + ' 个邮箱');
+    for (let index = 0; index < enabled.length; index += 1) {
+      const mailbox = enabled[index];
+      updateProgress(index, enabled.length, '正在同步：' + mailbox.label);
+      try {
+        let hasMore = true;
+        while (hasMore) {
+          const result = await api('/api/admin/mailboxes/' + mailbox.id + '/sync', { method: 'POST' });
+          hasMore = result.hasMore;
+        }
+        succeeded += 1;
+      } catch (_error) {
+        failed += 1;
+      }
+      updateProgress(index + 1, enabled.length, '已完成：' + mailbox.label);
+    }
+    await loadMailboxes();
+    notify('全部同步完成：成功 ' + succeeded + '，失败 ' + failed + '。飞书匹配正在后台继续');
   }
 
   function renderSummary(summary) {
@@ -230,17 +286,36 @@ export const ADMIN_JS = `(() => {
     if (!adminToken) return notify('请输入ADMIN_TOKEN', true);
     try {
       await loadMailboxes();
+      window.sessionStorage.setItem(tokenStorageKey, adminToken);
       byId('admin-token').value = '';
       byId('login-panel').hidden = true;
       byId('workspace').hidden = false;
       notify('管理员验证成功');
     } catch (error) {
+      window.sessionStorage.removeItem(tokenStorageKey);
       adminToken = '';
       notify(error.message, true);
     }
   });
 
   byId('refresh-button').addEventListener('click', () => loadMailboxes().catch((error) => notify(error.message, true)));
+  byId('refresh-summary').addEventListener('click', () => loadSummary().then(() => notify('概览已刷新')).catch((error) => notify(error.message, true)));
+  byId('sync-all-button').addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try { await syncAllMailboxes(); } finally { event.currentTarget.disabled = false; }
+  });
+  byId('refresh-messages').addEventListener('click', () => {
+    if (!currentMessageMailbox) return;
+    loadMessages(currentMessageMailbox.id, currentMessageMailbox.label).then(() => notify('邮件列表已刷新')).catch((error) => notify(error.message, true));
+  });
+  byId('logout-button').addEventListener('click', () => {
+    window.sessionStorage.removeItem(tokenStorageKey);
+    adminToken = '';
+    currentMailboxes = [];
+    byId('workspace').hidden = true;
+    byId('login-panel').hidden = false;
+    notify('已退出当前管理会话');
+  });
   byId('close-messages').addEventListener('click', () => { byId('message-panel').hidden = true; });
 
   byId('mailbox-form').addEventListener('submit', async (event) => {
@@ -264,4 +339,11 @@ export const ADMIN_JS = `(() => {
       submit.disabled = false;
     }
   });
+
+  if (adminToken) {
+    loadMailboxes().then(() => {
+      byId('login-panel').hidden = true;
+      byId('workspace').hidden = false;
+    }).catch((error) => notify(error.message, true));
+  }
 })();`;
