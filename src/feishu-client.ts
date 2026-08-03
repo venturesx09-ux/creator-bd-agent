@@ -149,6 +149,58 @@ export class FeishuClient {
     );
   }
 
+  isUnmatchedTableConfigured(): boolean {
+    return Boolean(this.config.unmatchedTableId);
+  }
+
+  async createUnmatchedRecord(fields: JsonObject): Promise<string> {
+    const tableId = this.requireUnmatchedTableId();
+    const response = await this.authorizedRequest(
+      `/bitable/v1/apps/${encodeURIComponent(this.config.baseAppToken)}` +
+        `/tables/${encodeURIComponent(tableId)}/records`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fields })
+      }
+    ) as { data?: { record?: { record_id?: string } } };
+    const recordId = response.data?.record?.record_id;
+    if (!recordId) {
+      throw new FeishuApiError(
+        "Feishu unmatched table did not return a record ID",
+        502
+      );
+    }
+    return recordId;
+  }
+
+  async updateUnmatchedRecord(
+    recordId: string,
+    fields: JsonObject
+  ): Promise<unknown> {
+    const tableId = this.requireUnmatchedTableId();
+    return this.authorizedRequest(
+      `/bitable/v1/apps/${encodeURIComponent(this.config.baseAppToken)}` +
+        `/tables/${encodeURIComponent(tableId)}` +
+        `/records/${encodeURIComponent(recordId)}`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fields })
+      }
+    );
+  }
+
+  private requireUnmatchedTableId(): string {
+    if (!this.config.unmatchedTableId) {
+      throw new FeishuApiError(
+        "FEISHU_UNMATCHED_TABLE_ID is not configured",
+        503
+      );
+    }
+    return this.config.unmatchedTableId;
+  }
+
   private async getTenantAccessToken(forceRefresh = false): Promise<string> {
     if (
       !forceRefresh &&

@@ -70,6 +70,8 @@ class MemoryRepository implements MailboxRepository {
   async listMessagesNeedingProcessing(): Promise<StoredMessage[]> { return []; }
   async updateMessageClassification(): Promise<void> {}
   async updateMessageMatch(): Promise<void> {}
+  async getUnmatchedRecordId(): Promise<string | undefined> { return undefined; }
+  async setUnmatchedRecordId(): Promise<void> {}
   async loadFeishuEmailIndex() { return { entries: [] }; }
   async replaceFeishuEmailIndex(): Promise<void> {}
   async loadFeishuCreatorIdIndex() { return []; }
@@ -77,7 +79,8 @@ class MemoryRepository implements MailboxRepository {
   async updateFeishuIndexRecord(): Promise<void> {}
   async getDailySummary() {
     return {
-      total: 0, matched: 0, unmatched: 0, pending: 0,
+      total: 0, matched: 0, uniqueMatchedCreators: 0,
+      duplicateMatchedMessages: 0, unmatched: 0, pending: 0,
       classifications: {
         creator_reply: 0, automatic_reply: 0, delivery_failure: 0,
         bulk_notification: 0, unknown: 0

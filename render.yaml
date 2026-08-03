@@ -19,6 +19,8 @@ services:
         sync: false
       - key: FEISHU_BASE_TABLE_ID
         sync: false
+      - key: FEISHU_UNMATCHED_TABLE_ID
+        sync: false
       - key: ADMIN_TOKEN
         generateValue: true
       - key: DATABASE_URL

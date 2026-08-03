@@ -78,6 +78,7 @@ describe("health and authentication", () => {
     const response = await request(app).get("/health").expect(200);
 
     assert.equal(response.body.status, "ok");
+    assert.equal(response.body.configuration.unmatchedTableConfigured, false);
     const serialized = JSON.stringify(response.body);
     assert.equal(serialized.includes(config.feishu.appSecret), false);
     assert.equal(serialized.includes(config.adminToken), false);
@@ -127,7 +128,9 @@ describe("mailbox admin", () => {
     listMessages: async () => [],
     syncAllEnabled: async () => ({ attempted: 1, succeeded: 1, failed: 0 }),
     getDailySummary: async () => ({
-      since: new Date(0).toISOString(), total: 1, matched: 1, unmatched: 0, pending: 0,
+      since: new Date(0).toISOString(), total: 1, matched: 1,
+      uniqueMatchedCreators: 1, duplicateMatchedMessages: 0,
+      unmatched: 0, pending: 0,
       classifications: {
         creator_reply: 1, automatic_reply: 0, delivery_failure: 0,
         bulk_notification: 0, unknown: 0

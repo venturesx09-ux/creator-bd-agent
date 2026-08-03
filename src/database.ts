@@ -56,11 +56,14 @@ export type StoredMessage = {
   matchedRecordId?: string;
   baseSyncStatus: BaseSyncStatus;
   matchReason?: MatchReason;
+  unmatchedRecordId?: string;
 };
 
 export type DailySummary = {
   total: number;
   matched: number;
+  uniqueMatchedCreators: number;
+  duplicateMatchedMessages: number;
   unmatched: number;
   pending: number;
   classifications: Record<EmailClassification, number>;
@@ -127,6 +130,8 @@ export interface MailboxRepository {
     matchedRecordId?: string,
     reason?: MatchReason
   ): Promise<void>;
+  getUnmatchedRecordId(messageId: string): Promise<string | undefined>;
+  setUnmatchedRecordId(messageId: string, recordId: string): Promise<void>;
   loadFeishuEmailIndex(): Promise<{
     entries: FeishuEmailIndexEntry[];
     refreshedAt?: Date;
@@ -169,6 +174,7 @@ type MessageRow = {
   matched_record_id: string | null;
   base_sync_status: BaseSyncStatus;
   match_reason: MatchReason | null;
+  unmatched_record_id: string | null;
 };
 
 function mailboxFromRow(row: MailboxRow): StoredMailbox {
@@ -249,7 +255,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS match_status VARCHAR(20) NOT NULL DEFAULT 'pending',
         ADD COLUMN IF NOT EXISTS matched_record_id VARCHAR(128),
         ADD COLUMN IF NOT EXISTS base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending',
-        ADD COLUMN IF NOT EXISTS match_reason VARCHAR(64)
+        ADD COLUMN IF NOT EXISTS match_reason VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS unmatched_record_id VARCHAR(128)
     `);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
@@ -456,7 +463,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
-              match_reason
+              match_reason, unmatched_record_id
        FROM email_messages
        WHERE mailbox_id = $1
        ORDER BY received_at DESC NULLS LAST, created_at DESC
@@ -473,7 +480,10 @@ export class PostgresMailboxRepository implements MailboxRepository {
       matchStatus: row.match_status,
       ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
       baseSyncStatus: row.base_sync_status,
-      ...(row.match_reason ? { matchReason: row.match_reason } : {})
+      ...(row.match_reason ? { matchReason: row.match_reason } : {}),
+      ...(row.unmatched_record_id
+        ? { unmatchedRecordId: row.unmatched_record_id }
+        : {})
     }));
   }
 
@@ -643,7 +653,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
-              match_reason
+              match_reason, unmatched_record_id
        FROM email_messages
        WHERE mailbox_id = $1
          AND (classification = 'unknown' OR match_status <> 'matched'
@@ -662,7 +672,10 @@ export class PostgresMailboxRepository implements MailboxRepository {
       matchStatus: row.match_status,
       ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
       baseSyncStatus: row.base_sync_status,
-      ...(row.match_reason ? { matchReason: row.match_reason } : {})
+      ...(row.match_reason ? { matchReason: row.match_reason } : {}),
+      ...(row.unmatched_record_id
+        ? { unmatchedRecordId: row.unmatched_record_id }
+        : {})
     }));
   }
 
@@ -695,6 +708,24 @@ export class PostgresMailboxRepository implements MailboxRepository {
     );
   }
 
+  async getUnmatchedRecordId(messageId: string): Promise<string | undefined> {
+    const result = await this.pool.query<{ unmatched_record_id: string | null }>(
+      "SELECT unmatched_record_id FROM email_messages WHERE id = $1",
+      [messageId]
+    );
+    return result.rows[0]?.unmatched_record_id ?? undefined;
+  }
+
+  async setUnmatchedRecordId(
+    messageId: string,
+    recordId: string
+  ): Promise<void> {
+    await this.pool.query(
+      "UPDATE email_messages SET unmatched_record_id = $2 WHERE id = $1",
+      [messageId, recordId]
+    );
+  }
+
   async getDailySummary(since: Date): Promise<DailySummary> {
     const result = await this.pool.query<{
       classification: EmailClassification;
@@ -710,6 +741,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
     const summary: DailySummary = {
       total: 0,
       matched: 0,
+      uniqueMatchedCreators: 0,
+      duplicateMatchedMessages: 0,
       unmatched: 0,
       pending: 0,
       classifications: {
@@ -726,6 +759,22 @@ export class PostgresMailboxRepository implements MailboxRepository {
       summary.classifications[row.classification] += count;
       summary[row.match_status] += count;
     }
+    const distinct = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(DISTINCT matched_record_id) AS count
+       FROM email_messages
+       WHERE COALESCE(received_at, created_at) >= $1
+         AND match_status = 'matched'
+         AND matched_record_id IS NOT NULL`,
+      [since]
+    );
+    summary.uniqueMatchedCreators = Number.parseInt(
+      distinct.rows[0]?.count ?? "0",
+      10
+    );
+    summary.duplicateMatchedMessages = Math.max(
+      0,
+      summary.matched - summary.uniqueMatchedCreators
+    );
     return summary;
   }
 }

@@ -65,6 +65,9 @@ export type MessageSummary = {
   matchStatus: "matched" | "unmatched" | "pending";
   matchedRecordId?: string;
   matchReason?: MatchReason;
+  mailboxLabel?: string;
+  mailboxEmail?: string;
+  project?: string;
 };
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
@@ -662,11 +665,18 @@ export class MailboxService implements MailboxServiceLike {
   }
 
   private async reprocessStoredMessages(mailboxId: string): Promise<void> {
+    const mailbox = await this.requireMailbox(mailboxId);
+    const connection = this.connectionConfig(mailbox);
     const rows = await this.repository.listMessagesNeedingProcessing(
       mailboxId,
       BACKFILL_BATCH_SIZE
     );
-    const messages = rows.map((row) => this.messageFromStored(row));
+    const messages = rows.map((row) => ({
+      ...this.messageFromStored(row),
+      mailboxLabel: mailbox.label,
+      mailboxEmail: connection.emailAddress,
+      project: mailbox.brand
+    }));
     for (const message of messages) {
       if (message.classification === "unknown") {
         message.classification = classifyEmail({

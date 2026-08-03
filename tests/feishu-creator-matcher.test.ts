@@ -34,7 +34,9 @@ describe("Feishu creator matching", () => {
       updateFeishuIndexRecord: async () => undefined,
       updateMessageMatch: async (id: string, status: MatchStatus, recordId?: string) => {
         updates.push({ id, status, ...(recordId ? { recordId } : {}) });
-      }
+      },
+      getUnmatchedRecordId: async () => undefined,
+      setUnmatchedRecordId: async () => undefined
     } as unknown as MailboxRepository;
     const feishuClient = {
       listAllBaseRecords: async () => [{
@@ -42,7 +44,8 @@ describe("Feishu creator matching", () => {
       }],
       updateBaseRecord: async (recordId: string, fields: Record<string, unknown>) => {
         baseUpdates.push({ recordId, fields });
-      }
+      },
+      isUnmatchedTableConfigured: () => false
     } as unknown as FeishuClient;
     const base = {
       uid: 1, subject: "Re", from: [], to: [], messageId: "m",
@@ -91,7 +94,9 @@ describe("Feishu creator matching", () => {
         status: MatchStatus,
         recordId?: string,
         reason?: string
-      ) => updates.push({ status, ...(recordId ? { recordId } : {}), ...(reason ? { reason } : {}) })
+      ) => updates.push({ status, ...(recordId ? { recordId } : {}), ...(reason ? { reason } : {}) }),
+      getUnmatchedRecordId: async () => undefined,
+      setUnmatchedRecordId: async () => undefined
     } as unknown as MailboxRepository;
     const feishuClient = {
       listAllBaseRecords: async () => [{
@@ -100,7 +105,8 @@ describe("Feishu creator matching", () => {
       }],
       updateBaseRecord: async (_recordId: string, fields: Record<string, unknown>) => {
         baseUpdates.push(fields);
-      }
+      },
+      isUnmatchedTableConfigured: () => false
     } as unknown as FeishuClient;
     await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
       id: "history-message", uid: 2, subject: "Re", from: [],
@@ -114,6 +120,83 @@ describe("Feishu creator matching", () => {
       status: "matched", recordId: "rec_history", reason: "history_creator_id"
     }]);
     assert.equal(baseUpdates[0]?.["最近发件邮箱"], "manager@agency.com");
+  });
+
+  it("creates one unmatched queue row and stores its Feishu record ID", async () => {
+    let storedQueueId: string | undefined;
+    let createdFields: Record<string, unknown> | undefined;
+    const repository = {
+      loadFeishuEmailIndex: async () => ({ entries: [] }),
+      replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [],
+      replaceFeishuCreatorIdIndex: async () => undefined,
+      updateMessageMatch: async () => undefined,
+      getUnmatchedRecordId: async () => undefined,
+      setUnmatchedRecordId: async (_messageId: string, recordId: string) => {
+        storedQueueId = recordId;
+      }
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      listAllBaseRecords: async () => [],
+      isUnmatchedTableConfigured: () => true,
+      createUnmatchedRecord: async (fields: Record<string, unknown>) => {
+        createdFields = fields;
+        return "rec_queue";
+      }
+    } as unknown as FeishuClient;
+
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
+      id: "unmatched-message", uid: 3, subject: "Re: campaign",
+      from: ["Agent <agent@example.com>"],
+      fromAddresses: ["agent@example.com"], to: [], messageId: "m3",
+      references: [], textPreview: "Thanks for reaching out.",
+      classification: "creator_reply", matchStatus: "pending",
+      receivedAt: "2026-08-04T12:00:00.000Z",
+      mailboxEmail: "bd@example.com", project: "Tripo"
+    }]);
+
+    assert.equal(storedQueueId, "rec_queue");
+    assert.equal(createdFields?.["待匹配邮件ID"], "unmatched-message");
+    assert.equal(createdFields?.["处理状态"], "待处理");
+    assert.equal(createdFields?.["未匹配原因"], "历史邮件中未找到达人ID");
+    assert.equal(createdFields?.["收件邮箱"], "bd@example.com");
+    assert.equal(createdFields?.["项目"], "Tripo");
+  });
+
+  it("marks an existing unmatched queue row resolved after matching", async () => {
+    let resolvedFields: Record<string, unknown> | undefined;
+    const repository = {
+      loadFeishuEmailIndex: async () => ({ entries: [] }),
+      replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [],
+      replaceFeishuCreatorIdIndex: async () => undefined,
+      updateFeishuIndexRecord: async () => undefined,
+      updateMessageMatch: async () => undefined,
+      getUnmatchedRecordId: async () => "rec_queue",
+      setUnmatchedRecordId: async () => undefined
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      listAllBaseRecords: async () => [{
+        record_id: "rec_creator", fields: { "达人邮箱": "creator@example.com" }
+      }],
+      updateBaseRecord: async () => undefined,
+      isUnmatchedTableConfigured: () => true,
+      updateUnmatchedRecord: async (
+        _recordId: string,
+        fields: Record<string, unknown>
+      ) => { resolvedFields = fields; }
+    } as unknown as FeishuClient;
+
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
+      id: "resolved-message", uid: 4, subject: "Re", from: [],
+      fromAddresses: ["creator@example.com"], to: [], messageId: "m4",
+      references: [], textPreview: "", classification: "creator_reply",
+      matchStatus: "pending"
+    }]);
+
+    assert.equal(resolvedFields?.["处理状态"], "已匹配");
+    assert.equal(resolvedFields?.["最终匹配记录ID"], "rec_creator");
+    assert.equal(typeof resolvedFields?.["解决时间"], "number");
   });
 
   it("does not downgrade an advanced cooperation stage", () => {

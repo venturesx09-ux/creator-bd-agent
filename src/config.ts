@@ -16,6 +16,7 @@ export type AppConfig = {
     encryptKey?: string;
     baseAppToken: string;
     baseTableId: string;
+    unmatchedTableId?: string;
   };
 };
 
@@ -93,6 +94,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const verificationToken = optional(env, "FEISHU_VERIFICATION_TOKEN");
   const encryptKey = optional(env, "FEISHU_ENCRYPT_KEY");
+  const unmatchedTableId = optional(env, "FEISHU_UNMATCHED_TABLE_ID");
 
   return {
     nodeEnv: env.NODE_ENV?.trim() || "development",
@@ -113,7 +115,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       ...(verificationToken ? { verificationToken } : {}),
       ...(encryptKey ? { encryptKey } : {}),
       baseAppToken: required(env, "FEISHU_BASE_APP_TOKEN"),
-      baseTableId: required(env, "FEISHU_BASE_TABLE_ID")
+      baseTableId: required(env, "FEISHU_BASE_TABLE_ID"),
+      ...(unmatchedTableId ? { unmatchedTableId } : {})
     }
   };
 }
@@ -122,6 +125,7 @@ export function configurationStatus(config: AppConfig): {
   feishuCoreConfigured: boolean;
   callbackSecurityConfigured: boolean;
   mailboxStorageConfigured: boolean;
+  unmatchedTableConfigured: boolean;
 } {
   return {
     feishuCoreConfigured: Boolean(
@@ -135,6 +139,7 @@ export function configurationStatus(config: AppConfig): {
     ),
     mailboxStorageConfigured: Boolean(
       config.database.url && config.mailboxEncryptionKey
-    )
+    ),
+    unmatchedTableConfigured: Boolean(config.feishu.unmatchedTableId)
   };
 }

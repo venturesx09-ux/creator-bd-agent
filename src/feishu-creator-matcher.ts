@@ -178,6 +178,40 @@ function classificationLabel(value: MessageSummary["classification"]): string {
   }[value];
 }
 
+function unmatchedReasonLabel(value: MatchReason): string {
+  return {
+    email_exact: "需要人工判断",
+    history_creator_id: "需要人工判断",
+    history_creator_id_missing: "历史邮件中未找到达人ID",
+    creator_id_not_found: "达人ID在飞书中不存在",
+    creator_id_ambiguous: "达人ID重复"
+  }[value];
+}
+
+function unmatchedFieldsForMessage(
+  message: MessageSummary,
+  reason: MatchReason
+): Record<string, unknown> {
+  const receivedAt = message.receivedAt
+    ? Date.parse(message.receivedAt)
+    : Number.NaN;
+  const fields: Record<string, unknown> = {
+    "待匹配邮件ID": message.id,
+    "发件人名称": message.from.join(", ").slice(0, 500),
+    "发件邮箱": message.fromAddresses[0] ?? "",
+    "邮件主题": message.subject.slice(0, 500),
+    "邮件分类": classificationLabel(message.classification),
+    "未匹配原因": unmatchedReasonLabel(reason),
+    "历史识别达人ID": extractHistoricalCreatorIds(message.textPreview).join(", "),
+    "邮件预览": message.textPreview.slice(0, 2_000),
+    "处理状态": "待处理"
+  };
+  if (Number.isFinite(receivedAt)) fields["收件时间"] = receivedAt;
+  if (message.project) fields["项目"] = message.project;
+  if (message.mailboxEmail) fields["收件邮箱"] = message.mailboxEmail;
+  return fields;
+}
+
 function currentStage(fields: Record<string, unknown>): string {
   const value = fields["合作阶段"];
   return typeof value === "string" ? value.trim() : "";
@@ -228,6 +262,7 @@ function resolveMessageRecord(
 ): {
   record?: FeishuBaseRecord;
   reason: MatchReason;
+  creatorId?: string;
 } {
   const emailRecord = message.fromAddresses
     .map((email) => indexes.emails.get(valueHash(email)))
@@ -249,9 +284,13 @@ function resolveMessageRecord(
   }
   if (matches.size === 1 && !ambiguous) {
     const record = matches.values().next().value as FeishuBaseRecord;
+    const creatorId = creatorIds.find((candidate) =>
+      indexes.creatorIds.get(valueHash(candidate))?.record_id === record.record_id
+    );
     return {
       record,
-      reason: "history_creator_id"
+      reason: "history_creator_id",
+      ...(creatorId ? { creatorId } : {})
     };
   }
   if (matches.size > 1 || ambiguous) {
@@ -310,6 +349,11 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
           message.matchStatus = "matched";
           message.matchedRecordId = matchedRecord.record_id;
           message.matchReason = resolution.reason;
+          await this.resolveUnmatchedQueueRecord(
+            message,
+            matchedRecord.record_id,
+            resolution.creatorId
+          );
           this.progress.messageSucceeded(true);
         } else {
           await this.repository.updateMessageMatch(
@@ -320,6 +364,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
           );
           message.matchStatus = "unmatched";
           message.matchReason = resolution.reason;
+          await this.syncUnmatchedQueueRecord(message, resolution.reason);
           this.progress.messageSucceeded(false);
         }
       } catch (error) {
@@ -332,6 +377,55 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       }
     }
     this.progress.endBatch();
+  }
+
+  private async syncUnmatchedQueueRecord(
+    message: MessageSummary,
+    reason: MatchReason
+  ): Promise<void> {
+    if (!this.feishuClient.isUnmatchedTableConfigured()) return;
+    try {
+      const fields = unmatchedFieldsForMessage(message, reason);
+      const existingRecordId = await this.repository.getUnmatchedRecordId(
+        message.id
+      );
+      if (existingRecordId) {
+        await this.feishuClient.updateUnmatchedRecord(existingRecordId, fields);
+        return;
+      }
+      const recordId = await this.feishuClient.createUnmatchedRecord(fields);
+      await this.repository.setUnmatchedRecordId(message.id, recordId);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "feishu_unmatched_queue_sync_failed",
+        messageId: message.id,
+        message: error instanceof Error ? error.message : "Internal error"
+      }));
+    }
+  }
+
+  private async resolveUnmatchedQueueRecord(
+    message: MessageSummary,
+    matchedRecordId: string,
+    creatorId?: string
+  ): Promise<void> {
+    if (!this.feishuClient.isUnmatchedTableConfigured()) return;
+    try {
+      const queueRecordId = await this.repository.getUnmatchedRecordId(message.id);
+      if (!queueRecordId) return;
+      await this.feishuClient.updateUnmatchedRecord(queueRecordId, {
+        "处理状态": "已匹配",
+        ...(creatorId ? { "最终匹配达人ID": creatorId } : {}),
+        "最终匹配记录ID": matchedRecordId,
+        "解决时间": Date.now()
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "feishu_unmatched_queue_resolve_failed",
+        messageId: message.id,
+        message: error instanceof Error ? error.message : "Internal error"
+      }));
+    }
   }
 
   requestIndexRefresh(): { status: "started" | "already_running" } {

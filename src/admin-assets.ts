@@ -334,9 +334,11 @@ export const ADMIN_JS = `(() => {
       ['邮件总数', summary.total],
       ['达人回复', summary.classifications.creator_reply],
       ['退信/自动/通知', summary.classifications.delivery_failure + summary.classifications.automatic_reply + summary.classifications.bulk_notification],
-      ['已匹配达人', summary.matched],
-      ['未匹配', summary.unmatched],
-      ['等待匹配', summary.pending]
+      ['已匹配邮件', summary.matched],
+      ['唯一匹配达人', summary.uniqueMatchedCreators],
+      ['重复回复邮件', summary.duplicateMatchedMessages],
+      ['未匹配邮件', summary.unmatched],
+      ['等待处理', summary.pending]
     ];
     const grid = byId('summary-grid');
     grid.replaceChildren();
