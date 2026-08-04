@@ -1,4 +1,4 @@
-# Creator BD Agent — Phase 4.0.0
+# Creator BD Agent — Phase 4.0.1
 
 这是Creator BD Agent第四阶段的“AI邮件分析工作台”。它保留第三阶段的邮箱只读同步与飞书匹配，并新增：
 
@@ -345,7 +345,7 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] 一个试点邮箱通过IMAP连接测试；
 - [ ] 能以只读模式同步最近邮件且不会修改已读状态；
 - [ ] 重复同步不会重复保存同一封邮件；
-- [ ] `/health`显示版本`4.0.0`且`openaiConfigured: true`；
+- [ ] `/health`显示版本`4.0.1`且`openaiConfigured: true`；
 - [ ] 管理页顶部显示过去24小时摘要；
 - [ ] 打开最近邮件后可看到原邮件与AI分析双栏；
 - [ ] 一封达人回复能生成中文摘要、报价提取和英文草稿；

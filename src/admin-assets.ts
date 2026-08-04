@@ -157,9 +157,11 @@ export const ADMIN_JS = `(() => {
     const node = element('button', text, 'secondary');
     node.type = 'button';
     node.addEventListener('click', async () => {
+      const originalText = node.textContent;
       node.disabled = true;
+      node.textContent = '处理中…';
       try { await action(); } catch (error) { notify(error.message, true); }
-      finally { node.disabled = false; }
+      finally { node.disabled = false; node.textContent = originalText; }
     });
     return node;
   }
@@ -417,6 +419,16 @@ export const ADMIN_JS = `(() => {
       const ai = element('section', undefined, 'message-column ai');
       ai.append(element('h4', 'AI分析（仅供人工确认）'));
       const analysis = message.analysis;
+      if (message.classification === 'creator_reply') {
+        const aiActions = element('div', undefined, 'actions ai-actions');
+        aiActions.append(button(analysis ? '重新分析' : 'AI分析', async () => {
+          notify('正在调用AI分析，请等待…');
+          await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/analyze', { method: 'POST' });
+          notify('AI分析已完成；如已匹配达人，系统也已尝试写回飞书');
+          await loadMessages(mailboxId, label);
+        }));
+        ai.append(aiActions);
+      }
       if (analysis) {
         analysisRow(ai, '中文摘要', analysis.summaryZh);
         analysisRow(ai, '回复类型', replyTypeLabels[analysis.replyType] || analysis.replyType);
@@ -440,16 +452,6 @@ export const ADMIN_JS = `(() => {
       }
       columns.append(original, ai);
       card.append(columns);
-
-      if (message.classification === 'creator_reply') {
-        const actions = element('div', undefined, 'actions');
-        actions.append(button(analysis ? '重新分析' : 'AI分析', async () => {
-          await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/analyze', { method: 'POST' });
-          notify('AI分析已完成；如已匹配达人，系统也已尝试写回飞书');
-          await loadMessages(mailboxId, label);
-        }));
-        card.append(actions);
-      }
       list.append(card);
     });
     byId('message-panel').hidden = false;
