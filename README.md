@@ -98,7 +98,7 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `MAILBOX_INITIAL_SYNC_LIMIT` | 否 | 首次同步最近多少封，默认20，最大100 |
 | `MAILBOX_SYNC_INTERVAL_MINUTES` | 否 | 自动只读同步间隔，默认2，可设置1至60 |
 | `OPENAI_API_KEY` | 是 | OpenAI API Key，只保存于Render Environment |
-| `OPENAI_MODEL` | 否 | 分析模型，默认`gpt-5.6-terra` |
+| `OPENAI_MODEL` | 否 | 分析模型，默认`gpt-5.6-luna` |
 | `PORT` | 否 | 默认3000；Render会自动提供 |
 
 不要保存临时`tenant_access_token`。程序会使用App ID和App Secret自动获取并缓存。

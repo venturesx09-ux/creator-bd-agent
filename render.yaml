@@ -38,7 +38,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
-        value: gpt-5.6-terra
+        value: gpt-5.6-luna
 
 databases:
   - name: creator-bd-agent-db

@@ -115,7 +115,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     openai: {
       apiKey: required(env, "OPENAI_API_KEY"),
-      model: optional(env, "OPENAI_MODEL") ?? "gpt-5.6-terra"
+      model: optional(env, "OPENAI_MODEL") ?? "gpt-5.6-luna"
     },
     feishu: {
       appId: required(env, "FEISHU_APP_ID"),

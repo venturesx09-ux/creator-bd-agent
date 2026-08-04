@@ -52,7 +52,7 @@ describe("AI email analysis", () => {
       markMessageAnalysisSynced: async () => { synced = true; }
     } as unknown as MailboxRepository;
     const client: EmailAnalysisClient = {
-      model: "gpt-5.6-terra",
+      model: "gpt-5.6-luna",
       analyze: async () => analysis
     };
     const feishuClient = {
@@ -91,7 +91,7 @@ describe("AI email analysis", () => {
 
     assert.deepEqual(result, analysis);
     assert.deepEqual(secretBox.decrypt<EmailAnalysis>(encrypted), analysis);
-    assert.equal(savedModel, "gpt-5.6-terra");
+    assert.equal(savedModel, "gpt-5.6-luna");
     assert.equal(writtenRecord, "rec123");
     assert.equal(writtenFields["AI中文摘要"], analysis.summaryZh);
     assert.equal(writtenFields["AI回复草稿"], analysis.replyDraftEn);
