@@ -12,7 +12,7 @@ export const ADMIN_HTML = `<!doctype html>
       <div>
         <p class="eyebrow">CREATOR BD AGENT</p>
         <h1>Creator BD工作台</h1>
-        <p class="muted">自动只读同步、匹配飞书并生成AI中文摘要与英文回复草稿；不会发送邮件。</p>
+        <p class="muted">自动只读同步、匹配飞书并生成AI草稿；邮件只会在你点击“确认并发送”后通过试点SMTP邮箱发出。</p>
       </div>
       <span class="badge">AI ASSISTED</span>
     </header>
@@ -68,6 +68,27 @@ export const ADMIN_HTML = `<!doctype html>
         <div id="mailbox-list" class="cards"></div>
       </section>
 
+      <section class="panel" id="smtp-panel" hidden>
+        <div class="section-heading">
+          <div><h2 id="smtp-title">配置试点SMTP</h2><p class="muted">密码加密保存且不会显示。保存后必须先测试，测试成功后才能启用发送；本阶段只能启用一个邮箱。</p></div>
+          <button id="close-smtp" class="secondary" type="button">关闭</button>
+        </div>
+        <form id="smtp-form">
+          <input name="mailboxId" type="hidden">
+          <div class="grid">
+            <label>SMTP服务器<input name="host" required maxlength="253" placeholder="smtp.example.com"></label>
+            <label>SMTP端口<select name="port"><option value="465">465</option><option value="587">587</option></select></label>
+            <label>加密方式<select name="security"><option value="tls">SSL/TLS</option><option value="starttls">STARTTLS</option></select></label>
+            <label>SMTP用户名<input name="username" required maxlength="254" autocomplete="username"></label>
+            <label>邮箱密码/应用专用密码<input name="password" type="password" required maxlength="2048" autocomplete="new-password"></label>
+            <label>Sent文件夹名称<input name="sentFolder" value="Sent" maxlength="128"></label>
+            <label>邮件签名<textarea name="signature" maxlength="2000" rows="5" placeholder="Best,&#10;Shark"></textarea></label>
+            <label class="checkbox-row"><input name="saveToSent" type="checkbox" checked>发送成功后通过IMAP保存到Sent文件夹</label>
+          </div>
+          <button type="submit">加密保存SMTP配置</button>
+        </form>
+      </section>
+
       <section class="panel">
         <h2>添加邮箱</h2>
         <form id="mailbox-form">
@@ -89,7 +110,7 @@ export const ADMIN_HTML = `<!doctype html>
 
       <section class="panel" id="message-panel" hidden>
         <div class="section-heading">
-          <div><h2 id="message-title">最近邮件</h2><p class="muted">左侧查看原邮件，右侧查看AI分析和飞书写回状态；草稿不会自动发送。</p></div>
+          <div><h2 id="message-title">最近邮件</h2><p class="muted">左侧查看原邮件，右侧编辑草稿；只有点击“确认并发送”才会发信，发送不可撤回。</p></div>
           <div class="heading-actions"><button id="refresh-messages" class="secondary" type="button">刷新邮件</button><button id="close-messages" class="secondary" type="button">关闭</button></div>
         </div>
         <div id="message-list" class="messages"></div>
@@ -106,7 +127,7 @@ export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple
 
 export const ADMIN_CSS_EXTRA = `main{width:min(1180px,calc(100% - 32px))}.messages{gap:14px}.message{border:1px solid #e8e8e3;border-radius:14px;padding:17px;background:#fff}.message:first-child{border-top:1px solid #e8e8e3}.message h3{font-size:16px}.message h4{font-size:13px;margin:0 0 10px}.message-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}.message-column{background:#f7f7f4;border-radius:12px;padding:14px;min-width:0}.message-column.ai{background:#f3f7ff;border:1px solid #dae5fb}.message-body{max-height:300px;overflow:auto}.analysis-row{border-top:1px solid rgba(0,0,0,.08);padding-top:8px;margin-top:8px}.analysis-row strong{display:block;font-size:11px;color:#6b6b6b;margin-bottom:3px}.draft{background:#fff;border-radius:9px;padding:10px;border:1px solid #dce5f5;max-height:320px;overflow:auto}.pill.success{background:#eaf7ee;color:#147a39}.pill.failed{background:#fff0ef;color:#a32119}.pill.pending{background:#fff7df;color:#835f00}@media(max-width:760px){.message-columns{grid-template-columns:1fr}}`;
 
-export const ADMIN_CSS_DRAFT = `.draft-editor{border-top:1px solid rgba(0,0,0,.08);margin-top:10px;padding-top:10px}.draft-editor label{margin-top:9px}.draft-editor textarea{width:100%;min-height:140px;resize:vertical;border:1px solid #cfd9ed;border-radius:9px;padding:10px;background:#fff;font:inherit;font-size:13px;line-height:1.55}.draft-editor textarea:focus{outline:2px solid #365fba;outline-offset:1px}.draft-editor .actions{margin-top:10px}`;
+export const ADMIN_CSS_DRAFT = `.draft-editor{border-top:1px solid rgba(0,0,0,.08);margin-top:10px;padding-top:10px}.draft-editor label{margin-top:9px}.draft-editor textarea,#smtp-form textarea{width:100%;min-height:140px;resize:vertical;border:1px solid #cfd9ed;border-radius:9px;padding:10px;background:#fff;font:inherit;font-size:13px;line-height:1.55}.draft-editor textarea:focus,#smtp-form textarea:focus{outline:2px solid #365fba;outline-offset:1px}.draft-editor .actions{margin-top:10px}.checkbox-row{display:flex;align-items:center;align-self:end;gap:9px;padding:11px 0}.checkbox-row input{width:auto}.smtp-ready{color:#147a39}.smtp-warning{color:#9a6700}.send-warning{background:#fff7df;border:1px solid #f0d785;border-radius:9px;padding:10px;margin-top:10px!important}.actions button.send-confirm{background:#a32119;color:#fff;border-color:#a32119}`;
 
 export const ADMIN_JS = `(() => {
   const tokenStorageKey = 'creator-bd-agent-admin-token';
@@ -168,6 +189,20 @@ export const ADMIN_JS = `(() => {
     return node;
   }
 
+  function openSmtpForm(mailbox) {
+    const form = byId('smtp-form');
+    form.reset();
+    form.elements.mailboxId.value = mailbox.id;
+    form.elements.host.value = mailbox.smtpHost || '';
+    form.elements.port.value = String(mailbox.smtpPort || 465);
+    form.elements.security.value = mailbox.smtpSecurity || 'tls';
+    form.elements.sentFolder.value = mailbox.sentFolder || 'Sent';
+    form.elements.saveToSent.checked = mailbox.saveToSent !== false;
+    byId('smtp-title').textContent = '配置试点SMTP · ' + mailbox.label;
+    byId('smtp-panel').hidden = false;
+    byId('smtp-panel').scrollIntoView({ behavior: 'smooth' });
+  }
+
   async function loadMailboxes() {
     const [data, summary] = await Promise.all([
       api('/api/admin/mailboxes'),
@@ -188,6 +223,16 @@ export const ADMIN_JS = `(() => {
       info.append(element('h3', mailbox.label));
       info.append(element('div', mailbox.emailAddress + (mailbox.brand ? ' · ' + mailbox.brand : ''), 'meta'));
       info.append(element('div', mailbox.imapHost + ':' + mailbox.imapPort + ' · ' + mailbox.imapSecurity.toUpperCase(), 'meta'));
+      const smtpText = !mailbox.smtpConfigured
+        ? 'SMTP未配置'
+        : mailbox.smtpEnabled
+          ? 'SMTP发送已启用 · ' + mailbox.smtpHost + ':' + mailbox.smtpPort
+          : mailbox.smtpLastTestStatus === 'success'
+            ? 'SMTP测试成功，尚未启用发送'
+            : mailbox.smtpLastTestStatus === 'failed'
+              ? 'SMTP测试失败：' + (mailbox.smtpLastErrorCode || '请检查配置')
+              : 'SMTP已配置，等待测试';
+      info.append(element('div', smtpText, 'meta ' + (mailbox.smtpEnabled ? 'smtp-ready' : 'smtp-warning')));
       const stateText = !mailbox.enabled ? '已停用' : mailbox.lastTestStatus === 'success' ? '连接正常' : mailbox.lastTestStatus === 'failed' ? '连接失败' : '未测试';
       top.append(info, element('span', stateText, 'state ' + (!mailbox.enabled ? 'disabled' : (mailbox.lastTestStatus || ''))));
       const actions = element('div', undefined, 'actions');
@@ -206,6 +251,24 @@ export const ADMIN_JS = `(() => {
         button('查看最近邮件', async () => {
           await loadMessages(mailbox.id, mailbox.label);
         }),
+        button(mailbox.smtpConfigured ? '重新配置SMTP' : '配置SMTP', async () => {
+          openSmtpForm(mailbox);
+        }),
+        ...(mailbox.smtpConfigured ? [
+          button('测试SMTP', async () => {
+            await api('/api/admin/mailboxes/' + mailbox.id + '/smtp/test', { method: 'POST' });
+            notify('SMTP连接与登录测试成功；现在可以启用试点发送');
+            await loadMailboxes();
+          }),
+          button(mailbox.smtpEnabled ? '停用SMTP发送' : '启用SMTP发送', async () => {
+            if (!mailbox.smtpEnabled && !window.confirm('确认把“' + mailbox.label + '”设为唯一的试点发信邮箱？')) return;
+            await api('/api/admin/mailboxes/' + mailbox.id + '/smtp/status', {
+              method: 'PATCH', body: JSON.stringify({ enabled: !mailbox.smtpEnabled })
+            });
+            notify(mailbox.smtpEnabled ? 'SMTP发送已停用' : 'SMTP发送已启用；仍然只会人工确认后发送');
+            await loadMailboxes();
+          })
+        ] : []),
         button(mailbox.enabled ? '停用' : '启用', async () => {
           await api('/api/admin/mailboxes/' + mailbox.id + '/status', {
             method: 'PATCH', body: JSON.stringify({ enabled: !mailbox.enabled })
@@ -374,6 +437,11 @@ export const ADMIN_JS = `(() => {
     failed: 'AI分析失败', skipped: '尚未分析'
   };
 
+  const sendStatusLabels = {
+    not_ready: '尚未准备发送', awaiting_confirmation: '等待人工确认',
+    sending: '发送处理中', sent: '已发送', failed: '上次发送失败'
+  };
+
   const replyTypeLabels = {
     interested_with_quote: '感兴趣并报价',
     interested_without_quote: '感兴趣未报价',
@@ -406,6 +474,7 @@ export const ADMIN_JS = `(() => {
   }
 
   function showMessages(mailboxId, label, messages) {
+    const activeMailbox = currentMailboxes.find((mailbox) => mailbox.id === mailboxId);
     byId('message-title').textContent = label + ' · 最近邮件';
     const list = byId('message-list');
     list.replaceChildren();
@@ -420,6 +489,11 @@ export const ADMIN_JS = `(() => {
       const aiState = message.aiAnalysisStatus || 'skipped';
       const aiClass = aiState === 'completed' ? 'success' : aiState === 'failed' ? 'failed' : 'pending';
       card.append(element('span', aiStatusLabels[aiState] || aiState, 'pill ' + aiClass));
+      if (message.classification === 'creator_reply') {
+        const sendState = message.sendStatus || (message.analysis ? 'awaiting_confirmation' : 'not_ready');
+        const sendClass = sendState === 'sent' ? 'success' : sendState === 'failed' ? 'failed' : 'pending';
+        card.append(element('span', sendStatusLabels[sendState] || sendState, 'pill ' + sendClass));
+      }
 
       const columns = element('div', undefined, 'message-columns');
       const original = element('section', undefined, 'message-column');
@@ -478,10 +552,60 @@ export const ADMIN_JS = `(() => {
             await loadMessages(mailboxId, label);
           })
         );
+        const recipient = (message.fromAddresses || []).find((address) =>
+          !activeMailbox || address.toLowerCase() !== activeMailbox.emailAddress.toLowerCase()
+        );
+        const sendState = message.sendStatus || 'awaiting_confirmation';
+        if (sendState !== 'sent' && sendState !== 'sending' && activeMailbox && activeMailbox.smtpEnabled && recipient) {
+          const sendButton = button('确认并发送（不可撤回）', async () => {
+            const confirmed = window.confirm(
+              '请最后确认：\\n\\n发件邮箱：' + activeMailbox.emailAddress +
+              '\\n收件人：' + recipient +
+              '\\n主题：' + (message.subject || '(无主题)') +
+              '\\n\\n点击“确定”后邮件会立即发出，无法撤回。'
+            );
+            if (!confirmed) return;
+            notify('正在通过SMTP发送，请勿重复点击或关闭页面…');
+            const result = await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/send', {
+              method: 'POST',
+              body: JSON.stringify({
+                confirm: true,
+                recipient: recipient,
+                draftZh: draftZh.value,
+                draftEn: draftEn.value
+              })
+            });
+            const copyStatus = result.message.sentCopyStatus === 'failed'
+              ? '；邮件已发出，但Sent副本保存失败，请到邮箱服务商确认'
+              : result.message.sentCopyStatus === 'saved'
+                ? '；Sent副本已保存'
+                : '';
+            notify('邮件发送成功' + copyStatus);
+            await loadMessages(mailboxId, label);
+            await loadMailboxes();
+          });
+          sendButton.classList.add('send-confirm');
+          draftActions.append(sendButton);
+          draftEditor.append(element('p', '最终收件人：' + recipient + '。发送前会再次弹窗确认。', 'send-warning'));
+        } else if (sendState === 'sent') {
+          draftEditor.append(element('p', '该回复已经发送，系统已阻止再次发送。', 'muted'));
+        } else if (sendState === 'sending') {
+          draftEditor.append(element('p', '该回复正在发送中，请勿重复操作。', 'muted'));
+        } else if (!activeMailbox || !activeMailbox.smtpEnabled) {
+          draftEditor.append(element('p', '当前邮箱尚未启用试点SMTP发送；可以继续编辑和保存草稿。', 'muted'));
+        } else if (!recipient) {
+          draftEditor.append(element('p', '未找到安全的原始发件人地址，禁止发送。', 'muted'));
+        }
         draftEditor.append(zhLabel, enLabel, draftActions);
         ai.append(draftEditor);
         analysisRow(ai, '飞书AI字段', message.aiBaseSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待写回/写回失败' : '未匹配达人，暂不写回');
         if (message.aiAnalyzedAt) analysisRow(ai, '分析时间', new Date(message.aiAnalyzedAt).toLocaleString());
+        if (message.sentAt) analysisRow(ai, '发送时间', new Date(message.sentAt).toLocaleString());
+        if (message.sendErrorCode) analysisRow(ai, '发送错误', message.sendErrorCode, 'failed');
+        if (message.sendStatus === 'sent') {
+          analysisRow(ai, 'Sent副本', message.sentCopyStatus === 'saved' ? '已保存' : message.sentCopyStatus === 'failed' ? '保存失败（邮件本身已发送）' : '由邮箱服务器自动保存/未要求保存');
+          analysisRow(ai, '飞书发送状态', message.sendFeishuSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待后台重试写回' : '无需写回');
+        }
       } else {
         const reason = aiState === 'failed'
           ? '上次分析失败：' + (message.aiErrorCode || '请稍后重试')
@@ -548,6 +672,32 @@ export const ADMIN_JS = `(() => {
     notify('已退出当前管理会话');
   });
   byId('close-messages').addEventListener('click', () => { byId('message-panel').hidden = true; });
+  byId('close-smtp').addEventListener('click', () => { byId('smtp-panel').hidden = true; });
+
+  byId('smtp-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    const values = Object.fromEntries(new FormData(form).entries());
+    const mailboxId = String(values.mailboxId || '');
+    values.port = Number(values.port);
+    values.saveToSent = form.elements.saveToSent.checked;
+    delete values.mailboxId;
+    try {
+      await api('/api/admin/mailboxes/' + mailboxId + '/smtp/config', {
+        method: 'POST', body: JSON.stringify(values)
+      });
+      form.elements.password.value = '';
+      byId('smtp-panel').hidden = true;
+      notify('SMTP配置已加密保存；下一步请在邮箱卡片点击“测试SMTP”');
+      await loadMailboxes();
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      submit.disabled = false;
+    }
+  });
 
   byId('mailbox-form').addEventListener('submit', async (event) => {
     event.preventDefault();

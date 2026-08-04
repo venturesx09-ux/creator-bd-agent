@@ -13,6 +13,7 @@ export interface EmailAnalysisProcessor {
     draftZh: string,
     draftEn: string
   ): Promise<EmailAnalysis>;
+  syncSentState(message: MessageSummary, sentAt: Date): Promise<void>;
 }
 
 function analysisFields(analysis: EmailAnalysis): Record<string, unknown> {
@@ -109,6 +110,31 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
     delete message.aiErrorCode;
     await this.syncToFeishu(message, updated);
     return updated;
+  }
+
+  async syncSentState(message: MessageSummary, sentAt: Date): Promise<void> {
+    if (!message.matchedRecordId) {
+      message.sendFeishuSyncStatus = "not_required";
+      return;
+    }
+    try {
+      await this.feishuClient.updateBaseRecord(message.matchedRecordId, {
+        "邮件同步状态": "已发送",
+        "最后联系时间": sentAt.getTime(),
+        ...(message.analysis
+          ? { "AI回复草稿": message.analysis.replyDraftEn }
+          : {})
+      });
+      await this.repository.markMessageSendFeishuSynced(message.id);
+      message.sendFeishuSyncStatus = "synced";
+    } catch (error) {
+      message.sendFeishuSyncStatus = "pending";
+      console.error(JSON.stringify({
+        event: "feishu_sent_state_writeback_failed",
+        messageId: message.id,
+        message: error instanceof Error ? error.message : "Internal error"
+      }));
+    }
   }
 
   private async processOnce(

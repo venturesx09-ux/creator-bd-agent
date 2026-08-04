@@ -11,7 +11,10 @@
 - `MAILBOX_ENCRYPTION_KEY` must be a separate base64-encoded 32-byte secret and must never be committed.
 - IMAP connections enforce TLS on port 993 or STARTTLS on port 143 and open the inbox read-only.
 - The admin page keeps `ADMIN_TOKEN` in page memory only and does not persist it in browser storage.
-- The current phase does not expose SMTP code and cannot send email.
+- SMTP credentials are encrypted with the mailbox encryption key and are never returned by the API.
+- Email sending requires an authenticated admin request, explicit confirmation, a tested SMTP configuration, and the single enabled pilot mailbox.
+- Scheduled jobs do not call the SMTP send path.
+- Recipient addresses are derived from the stored original sender and cannot be replaced by arbitrary UI input.
 - Automatic synchronization runs sequentially, skips disabled mailboxes, and prevents overlapping scheduled runs.
 - Mailbox deletion is refused when synchronized messages exist; disable the mailbox to preserve history.
 - Creator matching reads Feishu Base records but does not update Base records.

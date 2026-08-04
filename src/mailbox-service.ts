@@ -8,6 +8,9 @@ import type {
   AiBaseSyncStatus,
   MatchReason,
   MailboxRepository,
+  SendFeishuSyncStatus,
+  SendStatus,
+  SentCopyStatus,
   StoredMailbox,
   StoredMessageInput
 } from "./database.js";
@@ -17,6 +20,19 @@ import {
 } from "./email-analysis.js";
 import type { EmailAnalysisProcessor } from "./email-analysis-processor.js";
 import { SecretBox } from "./secret-box.js";
+import {
+  defaultSmtpFactory,
+  outboundMessageId,
+  rawSentCopy,
+  replyRecipient,
+  replySubject,
+  replyText,
+  replyThreadHeaders,
+  smtpErrorCode,
+  smtpTransportOptions,
+  type SmtpConnectionConfig,
+  type SmtpFactory
+} from "./smtp-reply.js";
 
 const MAX_SOURCE_BYTES = 256 * 1024;
 const SYNC_BATCH_SIZE = 100;
@@ -35,6 +51,10 @@ export type MailboxConnectionConfig = {
   inboxName: string;
 };
 
+type StoredMailboxConnectionConfig = MailboxConnectionConfig & {
+  smtp?: SmtpConnectionConfig;
+};
+
 export type CreateMailboxInput = MailboxConnectionConfig & {
   label: string;
   brand: string;
@@ -50,6 +70,16 @@ export type MailboxSummary = {
   imapPort: number;
   imapSecurity: "tls" | "starttls";
   enabled: boolean;
+  smtpConfigured: boolean;
+  smtpEnabled: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecurity?: "tls" | "starttls";
+  sentFolder?: string;
+  saveToSent?: boolean;
+  smtpLastTestAt?: string;
+  smtpLastTestStatus?: string;
+  smtpLastErrorCode?: string;
   lastTestAt?: string;
   lastTestStatus?: string;
   lastSyncAt?: string;
@@ -81,6 +111,12 @@ export type MessageSummary = {
   aiErrorCode?: string;
   aiModel?: string;
   aiBaseSyncStatus?: AiBaseSyncStatus;
+  sendStatus?: SendStatus;
+  sentAt?: string;
+  sentMessageId?: string;
+  sendErrorCode?: string;
+  sentCopyStatus?: SentCopyStatus;
+  sendFeishuSyncStatus?: SendFeishuSyncStatus;
 };
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
@@ -114,6 +150,9 @@ export interface MailboxServiceLike {
     messagesInInbox: number;
     nextUid: number;
   }>;
+  configureSmtp(id: string, input: unknown): Promise<MailboxSummary>;
+  testSmtp(id: string): Promise<{ status: "ok" }>;
+  setSmtpEnabled(id: string, enabled: boolean): Promise<MailboxSummary>;
   syncMailbox(id: string): Promise<{
     status: "ok";
     fetched: number;
@@ -127,6 +166,16 @@ export interface MailboxServiceLike {
     id: string,
     messageId: string,
     input: { draftZh: string; draftEn?: string; translate: boolean }
+  ): Promise<MessageSummary>;
+  sendReply(
+    id: string,
+    messageId: string,
+    input: {
+      confirm: true;
+      recipient: string;
+      draftZh: string;
+      draftEn: string;
+    }
   ): Promise<MessageSummary>;
   syncAllEnabled(): Promise<{
     attempted: number;
@@ -249,6 +298,76 @@ function validateCreateInput(value: unknown): CreateMailboxInput {
     imapPassword: requiredString(input.imapPassword, "imapPassword", 2_048),
     inboxName: optionalString(input.inboxName, "inboxName", 128) || "INBOX"
   };
+}
+
+function validateSmtpInput(value: unknown): SmtpConnectionConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new MailboxServiceError(
+      "Request body must be an object",
+      400,
+      "INVALID_SMTP_INPUT"
+    );
+  }
+  const input = value as Record<string, unknown>;
+  const host = requiredString(input.host, "host", 253).toLowerCase();
+  if (
+    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u.test(
+      host
+    )
+  ) {
+    throw new MailboxServiceError(
+      "SMTP host must be a public fully-qualified hostname",
+      400,
+      "INVALID_SMTP_INPUT"
+    );
+  }
+  const port = input.port;
+  const security = input.security;
+  if (
+    (port !== 465 && port !== 587) ||
+    (security !== "tls" && security !== "starttls") ||
+    (port === 465 && security !== "tls") ||
+    (port === 587 && security !== "starttls")
+  ) {
+    throw new MailboxServiceError(
+      "Use TLS with port 465 or STARTTLS with port 587",
+      400,
+      "INVALID_SMTP_INPUT"
+    );
+  }
+  if (typeof input.saveToSent !== "boolean") {
+    throw new MailboxServiceError(
+      "saveToSent must be a boolean",
+      400,
+      "INVALID_SMTP_INPUT"
+    );
+  }
+  return {
+    host,
+    port,
+    security,
+    username: requiredString(input.username, "username", 254),
+    password: requiredString(input.password, "password", 2_048),
+    sentFolder: optionalString(input.sentFolder, "sentFolder", 128) || "Sent",
+    saveToSent: input.saveToSent,
+    signature: optionalString(input.signature, "signature", 2_000)
+  };
+}
+
+function safeSmtpError(error: unknown, fallback: string): MailboxServiceError {
+  const code = smtpErrorCode(error);
+  const messages: Record<string, string> = {
+    SMTP_AUTH_FAILED: "SMTP authentication failed",
+    SMTP_TLS_FAILED: "SMTP TLS connection failed",
+    SMTP_RECIPIENT_REJECTED: "The recipient was rejected by the SMTP server",
+    SMTP_CONNECT_FAILED: "Unable to connect to the SMTP server",
+    SMTP_SEND_FAILED: "SMTP send failed"
+  };
+  return new MailboxServiceError(
+    messages[code] ?? "SMTP operation failed",
+    502,
+    code || fallback
+  );
 }
 
 function addresses(
@@ -392,7 +511,8 @@ export class MailboxService implements MailboxServiceLike {
     private readonly initialSyncLimit: number,
     private readonly imapFactory: ImapFactory = (options) => new ImapFlow(options),
     private readonly creatorMatcher?: CreatorMatcher,
-    private readonly analysisProcessor?: EmailAnalysisProcessor
+    private readonly analysisProcessor?: EmailAnalysisProcessor,
+    private readonly smtpFactory: SmtpFactory = defaultSmtpFactory
   ) {}
 
   async listMailboxes(): Promise<MailboxSummary[]> {
@@ -471,6 +591,81 @@ export class MailboxService implements MailboxServiceLike {
     } finally {
       await this.closeImap(client);
     }
+  }
+
+  async configureSmtp(id: string, value: unknown): Promise<MailboxSummary> {
+    const row = await this.requireMailbox(id);
+    const smtp = validateSmtpInput(value);
+    const stored = this.storedConnectionConfig(row);
+    const saved = await this.repository.saveSmtpConfig(
+      id,
+      this.secretBox.encrypt({ ...stored, smtp })
+    );
+    if (!saved) {
+      throw new MailboxServiceError(
+        "Mailbox not found",
+        404,
+        "MAILBOX_NOT_FOUND"
+      );
+    }
+    return this.toSummary(await this.requireMailbox(id));
+  }
+
+  async testSmtp(id: string): Promise<{ status: "ok" }> {
+    const row = await this.requireMailbox(id);
+    const smtp = this.requireSmtpConfig(row);
+    const transport = this.smtpFactory(smtpTransportOptions(smtp));
+    try {
+      await transport.verify();
+      await this.repository.recordSmtpTest(id, "success");
+      return { status: "ok" };
+    } catch (error) {
+      const safeError = safeSmtpError(error, "SMTP_TEST_FAILED");
+      await this.repository.recordSmtpTest(id, "failed", safeError.errorCode);
+      throw safeError;
+    } finally {
+      transport.close();
+    }
+  }
+
+  async setSmtpEnabled(id: string, enabled: boolean): Promise<MailboxSummary> {
+    const row = await this.requireMailbox(id);
+    this.requireSmtpConfig(row);
+    if (enabled) {
+      if (!row.enabled) {
+        throw new MailboxServiceError(
+          "Enable the mailbox before enabling SMTP",
+          409,
+          "MAILBOX_DISABLED"
+        );
+      }
+      if (row.smtpLastTestStatus !== "success") {
+        throw new MailboxServiceError(
+          "Test SMTP successfully before enabling sending",
+          409,
+          "SMTP_TEST_REQUIRED"
+        );
+      }
+      const anotherPilot = (await this.repository.listMailboxes()).some(
+        (candidate) => candidate.id !== id && candidate.smtpEnabled
+      );
+      if (anotherPilot) {
+        throw new MailboxServiceError(
+          "Only one SMTP pilot mailbox can be enabled in this phase",
+          409,
+          "SMTP_PILOT_ALREADY_ENABLED"
+        );
+      }
+    }
+    const result = await this.repository.setSmtpEnabled(id, enabled);
+    if (result !== "updated") {
+      throw new MailboxServiceError(
+        "Only one SMTP pilot mailbox can be enabled in this phase",
+        409,
+        "SMTP_PILOT_ALREADY_ENABLED"
+      );
+    }
+    return this.toSummary(await this.requireMailbox(id));
   }
 
   async syncMailbox(id: string): Promise<{
@@ -761,6 +956,227 @@ export class MailboxService implements MailboxServiceLike {
     }
   }
 
+  async sendReply(
+    id: string,
+    messageId: string,
+    input: {
+      confirm: true;
+      recipient: string;
+      draftZh: string;
+      draftEn: string;
+    }
+  ): Promise<MessageSummary> {
+    if (
+      input.confirm !== true ||
+      typeof input.recipient !== "string" ||
+      typeof input.draftZh !== "string" ||
+      typeof input.draftEn !== "string"
+    ) {
+      throw new MailboxServiceError(
+        "Explicit confirmation and both drafts are required",
+        400,
+        "SEND_CONFIRMATION_REQUIRED"
+      );
+    }
+    const mailbox = await this.requireMailbox(id);
+    if (!mailbox.enabled || !mailbox.smtpEnabled) {
+      throw new MailboxServiceError(
+        "SMTP sending is not enabled for this pilot mailbox",
+        409,
+        "SMTP_NOT_ENABLED"
+      );
+    }
+    if (mailbox.smtpLastTestStatus !== "success") {
+      throw new MailboxServiceError(
+        "Test SMTP successfully before sending",
+        409,
+        "SMTP_TEST_REQUIRED"
+      );
+    }
+    const row = await this.repository.getMessage(id, messageId);
+    if (!row || row.classification !== "creator_reply") {
+      throw new MailboxServiceError(
+        "Only stored creator replies can be sent",
+        409,
+        "MESSAGE_NOT_SENDABLE"
+      );
+    }
+    const storedConfig = this.storedConnectionConfig(mailbox);
+    const smtp = this.requireSmtpConfig(mailbox);
+    const message: MessageSummary = {
+      ...this.messageFromStored(row),
+      mailboxLabel: mailbox.label,
+      mailboxEmail: storedConfig.emailAddress,
+      project: mailbox.brand
+    };
+    if (!message.analysis || !this.analysisProcessor) {
+      throw new MailboxServiceError(
+        "Analyze the message and save a reply draft before sending",
+        409,
+        "AI_ANALYSIS_REQUIRED"
+      );
+    }
+    const recipient = replyRecipient(
+      message.fromAddresses,
+      storedConfig.emailAddress
+    );
+    if (!recipient || recipient !== input.recipient.trim().toLowerCase()) {
+      throw new MailboxServiceError(
+        "The confirmed recipient does not match the original sender",
+        409,
+        "RECIPIENT_MISMATCH"
+      );
+    }
+
+    try {
+      await this.analysisProcessor.saveDrafts(
+        message,
+        input.draftZh,
+        input.draftEn
+      );
+    } catch (error) {
+      throw new MailboxServiceError(
+        "Save the reply draft before sending",
+        400,
+        error instanceof Error ? error.message : "INVALID_DRAFT"
+      );
+    }
+
+    const attemptId = randomUUID();
+    const generatedMessageId = outboundMessageId(
+      message.id,
+      attemptId,
+      storedConfig.emailAddress
+    );
+    const claim = await this.repository.claimMessageForSend({
+      attemptId,
+      mailboxId: id,
+      messageId: message.id,
+      recipientHash: createHash("sha256").update(recipient).digest("hex"),
+      outboundMessageId: generatedMessageId
+    });
+    if (claim === "already_sent") {
+      throw new MailboxServiceError(
+        "This reply has already been sent",
+        409,
+        "MESSAGE_ALREADY_SENT"
+      );
+    }
+    if (claim === "busy") {
+      throw new MailboxServiceError(
+        "This reply is already being sent",
+        409,
+        "MESSAGE_SEND_IN_PROGRESS"
+      );
+    }
+    if (claim !== "claimed") {
+      throw new MailboxServiceError(
+        "Message not found",
+        404,
+        "MESSAGE_NOT_FOUND"
+      );
+    }
+
+    const sentAt = new Date();
+    const subject = replySubject(message.subject);
+    const text = replyText(message.analysis.replyDraftEn, smtp.signature);
+    const thread = replyThreadHeaders({
+      originalMessageId: message.messageId,
+      references: message.references
+    });
+    const transport = this.smtpFactory(smtpTransportOptions(smtp));
+    let providerMessageId = generatedMessageId;
+    try {
+      const info = await transport.sendMail({
+        messageId: generatedMessageId,
+        date: sentAt,
+        from: {
+          name: storedConfig.senderName,
+          address: storedConfig.emailAddress
+        },
+        to: recipient,
+        subject,
+        text,
+        ...thread,
+        disableFileAccess: true,
+        disableUrlAccess: true
+      });
+      if (info.rejected?.length) {
+        const rejected = new Error("Recipient rejected") as Error & {
+          code: string;
+        };
+        rejected.code = "EENVELOPE";
+        throw rejected;
+      }
+      if (
+        typeof info.messageId === "string" &&
+        /^<[^<>\r\n]{1,510}>$/u.test(info.messageId)
+      ) {
+        providerMessageId = info.messageId;
+      }
+    } catch (error) {
+      const safeError = safeSmtpError(error, "SMTP_SEND_FAILED");
+      await this.repository
+        .recordMessageSendFailure(
+          attemptId,
+          message.id,
+          safeError.errorCode
+        )
+        .catch(() => undefined);
+      throw safeError;
+    } finally {
+      transport.close();
+    }
+
+    await this.repository.recordMessageSent({
+      attemptId,
+      messageId: message.id,
+      providerMessageId,
+      sentAt,
+      sentCopyStatus: smtp.saveToSent ? "pending" : "not_required"
+    });
+    message.sendStatus = "sent";
+    message.sentAt = sentAt.toISOString();
+    message.sentMessageId = providerMessageId;
+    message.sentCopyStatus = smtp.saveToSent ? "pending" : "not_required";
+    message.sendFeishuSyncStatus = message.matchedRecordId
+      ? "pending"
+      : "not_required";
+    delete message.sendErrorCode;
+
+    if (smtp.saveToSent) {
+      try {
+        await this.appendSentCopy(storedConfig, smtp, rawSentCopy({
+          senderName: storedConfig.senderName,
+          senderEmail: storedConfig.emailAddress,
+          recipient,
+          subject,
+          text,
+          sentAt,
+          messageId: providerMessageId,
+          ...thread
+        }));
+        await this.repository
+          .markSentCopyStatus(message.id, "saved")
+          .catch(() => undefined);
+        message.sentCopyStatus = "saved";
+      } catch {
+        await this.repository
+          .markSentCopyStatus(message.id, "failed")
+          .catch(() => undefined);
+        message.sentCopyStatus = "failed";
+        console.error(JSON.stringify({
+          event: "sent_copy_append_failed",
+          messageId: message.id,
+          code: "SENT_COPY_FAILED"
+        }));
+      }
+    }
+
+    await this.analysisProcessor.syncSentState(message, sentAt);
+    return message;
+  }
+
   private messageFromStored(row: import("./database.js").StoredMessage): MessageSummary {
     const payload = this.secretBox.decrypt<LegacyEncryptedMessagePayload>(
       row.encryptedPayload
@@ -802,7 +1218,13 @@ export class MailboxService implements MailboxServiceLike {
         : {}),
       ...(row.aiErrorCode ? { aiErrorCode: row.aiErrorCode } : {}),
       ...(row.aiModel ? { aiModel: row.aiModel } : {}),
-      aiBaseSyncStatus: row.aiBaseSyncStatus
+      aiBaseSyncStatus: row.aiBaseSyncStatus,
+      sendStatus: row.sendStatus,
+      ...(row.sentAt ? { sentAt: row.sentAt.toISOString() } : {}),
+      ...(row.sentMessageId ? { sentMessageId: row.sentMessageId } : {}),
+      ...(row.sendErrorCode ? { sendErrorCode: row.sendErrorCode } : {}),
+      sentCopyStatus: row.sentCopyStatus,
+      sendFeishuSyncStatus: row.sendFeishuSyncStatus
     };
   }
 
@@ -843,16 +1265,27 @@ export class MailboxService implements MailboxServiceLike {
             (message.aiAnalysisStatus === "completed" &&
               message.matchedRecordId !== undefined &&
               message.aiBaseSyncStatus !== "synced"));
-        if (!shouldAnalyze) continue;
-        try {
-          await this.analysisProcessor.process(message);
-        } catch (error) {
-          console.error(JSON.stringify({
-            event: "mailbox_background_ai_failed",
-            mailboxId,
-            messageId: message.id,
-            code: error instanceof Error ? error.message : "OPENAI_ANALYSIS_FAILED"
-          }));
+        if (shouldAnalyze) {
+          try {
+            await this.analysisProcessor.process(message);
+          } catch (error) {
+            console.error(JSON.stringify({
+              event: "mailbox_background_ai_failed",
+              mailboxId,
+              messageId: message.id,
+              code: error instanceof Error ? error.message : "OPENAI_ANALYSIS_FAILED"
+            }));
+          }
+        }
+        if (
+          message.sendStatus === "sent" &&
+          message.sendFeishuSyncStatus === "pending" &&
+          message.sentAt
+        ) {
+          await this.analysisProcessor.syncSentState(
+            message,
+            new Date(message.sentAt)
+          );
         }
       }
     }
@@ -917,11 +1350,32 @@ export class MailboxService implements MailboxServiceLike {
   }
 
   private connectionConfig(row: StoredMailbox): MailboxConnectionConfig {
-    return this.secretBox.decrypt<MailboxConnectionConfig>(row.encryptedConfig);
+    return this.storedConnectionConfig(row);
+  }
+
+  private storedConnectionConfig(
+    row: StoredMailbox
+  ): StoredMailboxConnectionConfig {
+    return this.secretBox.decrypt<StoredMailboxConnectionConfig>(
+      row.encryptedConfig
+    );
+  }
+
+  private requireSmtpConfig(row: StoredMailbox): SmtpConnectionConfig {
+    const smtp = this.storedConnectionConfig(row).smtp;
+    if (!smtp) {
+      throw new MailboxServiceError(
+        "Configure SMTP for this mailbox first",
+        409,
+        "SMTP_NOT_CONFIGURED"
+      );
+    }
+    return smtp;
   }
 
   private toSummary(row: StoredMailbox): MailboxSummary {
-    const config = this.connectionConfig(row);
+    const config = this.storedConnectionConfig(row);
+    const smtp = config.smtp;
     return {
       id: row.id,
       label: row.label,
@@ -932,11 +1386,49 @@ export class MailboxService implements MailboxServiceLike {
       imapPort: config.imapPort,
       imapSecurity: config.imapSecurity,
       enabled: row.enabled,
+      smtpConfigured: Boolean(smtp),
+      smtpEnabled: row.smtpEnabled,
+      ...(smtp ? {
+        smtpHost: smtp.host,
+        smtpPort: smtp.port,
+        smtpSecurity: smtp.security,
+        sentFolder: smtp.sentFolder,
+        saveToSent: smtp.saveToSent
+      } : {}),
+      ...(row.smtpLastTestAt
+        ? { smtpLastTestAt: row.smtpLastTestAt.toISOString() }
+        : {}),
+      ...(row.smtpLastTestStatus
+        ? { smtpLastTestStatus: row.smtpLastTestStatus }
+        : {}),
+      ...(row.smtpLastErrorCode
+        ? { smtpLastErrorCode: row.smtpLastErrorCode }
+        : {}),
       ...(row.lastTestAt ? { lastTestAt: row.lastTestAt.toISOString() } : {}),
       ...(row.lastTestStatus ? { lastTestStatus: row.lastTestStatus } : {}),
       ...(row.lastSyncAt ? { lastSyncAt: row.lastSyncAt.toISOString() } : {}),
       ...(row.lastErrorCode ? { lastErrorCode: row.lastErrorCode } : {})
     };
+  }
+
+  private async appendSentCopy(
+    config: MailboxConnectionConfig,
+    smtp: SmtpConnectionConfig,
+    content: Buffer
+  ): Promise<void> {
+    const client = this.createImapClient(config);
+    try {
+      await client.connect();
+      const result = await client.append(
+        smtp.sentFolder,
+        content,
+        ["\\Seen"],
+        new Date()
+      );
+      if (result === false) throw new Error("IMAP append failed");
+    } finally {
+      await this.closeImap(client);
+    }
   }
 
   private createImapClient(config: MailboxConnectionConfig): ImapFlow {

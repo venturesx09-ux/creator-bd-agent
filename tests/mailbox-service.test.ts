@@ -15,6 +15,7 @@ import {
   type MailboxConnectionConfig
 } from "../src/mailbox-service.js";
 import { SecretBox } from "../src/secret-box.js";
+import type { SmtpFactory } from "../src/smtp-reply.js";
 
 class MemoryRepository implements MailboxRepository {
   rows: StoredMailbox[] = [];
@@ -35,6 +36,7 @@ class MemoryRepository implements MailboxRepository {
     const row: StoredMailbox = {
       ...input,
       enabled: true,
+      smtpEnabled: false,
       lastUid: 0,
       createdAt: now,
       updatedAt: now
@@ -47,6 +49,37 @@ class MemoryRepository implements MailboxRepository {
     if (!row) return false;
     row.enabled = enabled;
     return true;
+  }
+  async saveSmtpConfig(id: string, encryptedConfig: string): Promise<boolean> {
+    const row = this.rows.find((item) => item.id === id);
+    if (!row) return false;
+    row.encryptedConfig = encryptedConfig;
+    row.smtpEnabled = false;
+    delete row.smtpLastTestAt;
+    delete row.smtpLastTestStatus;
+    delete row.smtpLastErrorCode;
+    return true;
+  }
+  async recordSmtpTest(
+    id: string,
+    status: "success" | "failed",
+    errorCode?: string
+  ): Promise<void> {
+    const row = this.rows.find((item) => item.id === id);
+    if (!row) return;
+    row.smtpLastTestAt = new Date();
+    row.smtpLastTestStatus = status;
+    if (errorCode) row.smtpLastErrorCode = errorCode;
+    else delete row.smtpLastErrorCode;
+  }
+  async setSmtpEnabled(id: string, enabled: boolean): Promise<"updated" | "conflict"> {
+    if (enabled && this.rows.some((item) => item.id !== id && item.smtpEnabled)) {
+      return "conflict";
+    }
+    const row = this.rows.find((item) => item.id === id);
+    if (!row) return "conflict";
+    row.smtpEnabled = enabled;
+    return "updated";
   }
   async deleteMailboxIfEmpty(id: string): Promise<"deleted" | "not_found" | "has_messages"> {
     const index = this.rows.findIndex((item) => item.id === id);
@@ -70,6 +103,11 @@ class MemoryRepository implements MailboxRepository {
   async saveMessageAnalysis(): Promise<void> {}
   async recordMessageAnalysisFailure(): Promise<void> {}
   async markMessageAnalysisSynced(): Promise<void> {}
+  async claimMessageForSend(): Promise<"claimed"> { return "claimed"; }
+  async recordMessageSent(): Promise<void> {}
+  async recordMessageSendFailure(): Promise<void> {}
+  async markSentCopyStatus(): Promise<void> {}
+  async markMessageSendFeishuSynced(): Promise<void> {}
   async listKnownUids(): Promise<Set<number>> { return new Set(); }
   async listMessagesNeedingProcessing(): Promise<StoredMessage[]> { return []; }
   async updateMessageClassification(): Promise<void> {}
@@ -146,6 +184,62 @@ describe("MailboxService configuration", () => {
       (error: unknown) =>
         error instanceof MailboxServiceError && error.errorCode === "INVALID_INPUT"
     );
+  });
+
+  it("encrypts SMTP credentials, verifies without sending, then enables one pilot", async () => {
+    const repository = new MemoryRepository();
+    const secretBox = new SecretBox(Buffer.alloc(32, 7).toString("base64"));
+    let verifyCalls = 0;
+    let sendCalls = 0;
+    const smtpFactory: SmtpFactory = () => ({
+      verify: async () => { verifyCalls += 1; return true; },
+      sendMail: async () => { sendCalls += 1; return {}; },
+      close: () => undefined
+    });
+    const service = new MailboxService(
+      repository,
+      secretBox,
+      20,
+      undefined,
+      undefined,
+      undefined,
+      smtpFactory
+    );
+    const mailbox = await service.createMailbox({
+      label: "Pilot",
+      brand: "Tripo",
+      emailAddress: "shark@example.com",
+      senderName: "Shark",
+      imapHost: "imap.example.com",
+      imapPort: 993,
+      imapSecurity: "tls",
+      imapUsername: "shark@example.com",
+      imapPassword: "imap-password",
+      inboxName: "INBOX"
+    });
+
+    const configured = await service.configureSmtp(mailbox.id, {
+      host: "smtp.example.com",
+      port: 465,
+      security: "tls",
+      username: "shark@example.com",
+      password: "smtp-application-password",
+      sentFolder: "Sent",
+      saveToSent: true,
+      signature: "Best, Shark"
+    });
+    assert.equal(configured.smtpConfigured, true);
+    assert.equal(configured.smtpEnabled, false);
+    assert.equal(
+      repository.rows[0]?.encryptedConfig.includes("smtp-application-password"),
+      false
+    );
+
+    await service.testSmtp(mailbox.id);
+    const enabled = await service.setSmtpEnabled(mailbox.id, true);
+    assert.equal(enabled.smtpEnabled, true);
+    assert.equal(verifyCalls, 1);
+    assert.equal(sendCalls, 0);
   });
 });
 

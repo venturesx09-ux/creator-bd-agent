@@ -1,9 +1,9 @@
 {
   "name": "creator-bd-agent",
-  "version": "4.1.2",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
-  "description": "Creator BD backend with Feishu matching and automatic encrypted read-only IMAP synchronization.",
+  "description": "Creator BD backend with IMAP sync, Feishu matching, AI drafts, and manually confirmed SMTP replies.",
   "engines": {
     "node": ">=22 <25"
   },
@@ -19,6 +19,7 @@
     "express": "5.2.1",
     "imapflow": "^1.6.5",
     "mailparser": "^3.9.14",
+    "nodemailer": "^9.0.4",
     "openai": "^7.4.0",
     "pg": "^8.22.0",
     "zod": "^4.4.3"
@@ -27,6 +28,7 @@
     "@types/express": "5.0.6",
     "@types/mailparser": "^3.4.6",
     "@types/node": "22.19.15",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.3",
     "@types/supertest": "7.2.1",
     "supertest": "7.2.2",

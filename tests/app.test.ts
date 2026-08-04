@@ -111,7 +111,9 @@ describe("mailbox admin", () => {
     imapHost: "imap.example.com",
     imapPort: 993,
     imapSecurity: "tls" as const,
-    enabled: true
+    enabled: true,
+    smtpConfigured: false,
+    smtpEnabled: false
   };
   const mailboxService: MailboxServiceLike = {
     listMailboxes: async () => [mailbox],
@@ -122,6 +124,19 @@ describe("mailbox admin", () => {
       status: "ok",
       messagesInInbox: 12,
       nextUid: 13
+    }),
+    configureSmtp: async () => ({
+      ...mailbox,
+      smtpConfigured: true,
+      smtpHost: "smtp.example.com",
+      smtpPort: 465,
+      smtpSecurity: "tls" as const
+    }),
+    testSmtp: async () => ({ status: "ok" }),
+    setSmtpEnabled: async (_id, enabled) => ({
+      ...mailbox,
+      smtpConfigured: true,
+      smtpEnabled: enabled
     }),
     syncMailbox: async () => ({
       status: "ok",
@@ -164,6 +179,13 @@ describe("mailbox admin", () => {
     }),
     updateMessageDrafts: async (mailboxId, messageId) =>
       mailboxService.analyzeMessage(mailboxId, messageId),
+    sendReply: async (mailboxId, messageId) => ({
+      ...(await mailboxService.analyzeMessage(mailboxId, messageId)),
+      sendStatus: "sent",
+      sentAt: new Date(0).toISOString(),
+      sentCopyStatus: "saved",
+      sendFeishuSyncStatus: "synced"
+    }),
     syncAllEnabled: async () => ({ attempted: 1, succeeded: 1, failed: 0 }),
     getDailySummary: async () => ({
       since: new Date(0).toISOString(), total: 1, matched: 1,
@@ -216,6 +238,56 @@ describe("mailbox admin", () => {
       .send({ draftZh: "你好，感谢你的回复。", translate: true })
       .expect(200);
     assert.equal(response.body.message.analysis.replyDraftZh.includes("感谢"), true);
+  });
+
+  it("protects SMTP configuration and requires explicit confirmation to send", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    const auth = { authorization: `Bearer ${ADMIN_TOKEN}` };
+    const smtpConfigUrl = `/api/admin/mailboxes/${mailbox.id}/smtp/config`;
+    await request(app).post(smtpConfigUrl).expect(401);
+    const configured = await request(app)
+      .post(smtpConfigUrl)
+      .set(auth)
+      .send({
+        host: "smtp.example.com",
+        port: 465,
+        security: "tls",
+        username: "test@example.com",
+        password: "application-password",
+        sentFolder: "Sent",
+        saveToSent: true,
+        signature: "Best, Shark"
+      })
+      .expect(200);
+    assert.equal(configured.body.mailbox.smtpConfigured, true);
+
+    await request(app)
+      .post(`/api/admin/mailboxes/${mailbox.id}/smtp/test`)
+      .set(auth)
+      .expect(200);
+    await request(app)
+      .patch(`/api/admin/mailboxes/${mailbox.id}/smtp/status`)
+      .set(auth)
+      .send({ enabled: true })
+      .expect(200);
+
+    const sendUrl = `/api/admin/mailboxes/${mailbox.id}/messages/message_test/send`;
+    await request(app)
+      .post(sendUrl)
+      .set(auth)
+      .send({ recipient: "creator@example.com", draftZh: "你好", draftEn: "Hi" })
+      .expect(400);
+    const sent = await request(app)
+      .post(sendUrl)
+      .set(auth)
+      .send({
+        confirm: true,
+        recipient: "creator@example.com",
+        draftZh: "你好，感谢回复。",
+        draftEn: "Hi, thank you for your reply."
+      })
+      .expect(200);
+    assert.equal(sent.body.message.sendStatus, "sent");
   });
 
   it("protects mailbox APIs and returns only safe mailbox metadata", async () => {

@@ -15,6 +15,10 @@ export type StoredMailbox = {
   lastTestStatus?: string;
   lastSyncAt?: Date;
   lastErrorCode?: string;
+  smtpEnabled: boolean;
+  smtpLastTestAt?: Date;
+  smtpLastTestStatus?: string;
+  smtpLastErrorCode?: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -44,6 +48,14 @@ export type AiAnalysisStatus =
   | "failed"
   | "skipped";
 export type AiBaseSyncStatus = "pending" | "synced";
+export type SendStatus =
+  | "not_ready"
+  | "awaiting_confirmation"
+  | "sending"
+  | "sent"
+  | "failed";
+export type SentCopyStatus = "not_required" | "pending" | "saved" | "failed";
+export type SendFeishuSyncStatus = "not_required" | "pending" | "synced";
 export type MatchReason =
   | "email_exact"
   | "subject_creator_id"
@@ -70,6 +82,12 @@ export type StoredMessage = {
   aiErrorCode?: string;
   aiModel?: string;
   aiBaseSyncStatus: AiBaseSyncStatus;
+  sendStatus: SendStatus;
+  sentAt?: Date;
+  sentMessageId?: string;
+  sendErrorCode?: string;
+  sentCopyStatus: SentCopyStatus;
+  sendFeishuSyncStatus: SendFeishuSyncStatus;
 };
 
 export type DailySummary = {
@@ -109,6 +127,13 @@ export interface MailboxRepository {
     encryptedConfig: string;
   }): Promise<StoredMailbox>;
   setMailboxEnabled(id: string, enabled: boolean): Promise<boolean>;
+  saveSmtpConfig(id: string, encryptedConfig: string): Promise<boolean>;
+  recordSmtpTest(
+    id: string,
+    status: "success" | "failed",
+    errorCode?: string
+  ): Promise<void>;
+  setSmtpEnabled(id: string, enabled: boolean): Promise<"updated" | "conflict">;
   deleteMailboxIfEmpty(id: string): Promise<"deleted" | "not_found" | "has_messages">;
   recordConnectionTest(
     id: string,
@@ -153,6 +178,30 @@ export interface MailboxRepository {
   ): Promise<void>;
   recordMessageAnalysisFailure(messageId: string, errorCode: string): Promise<void>;
   markMessageAnalysisSynced(messageId: string): Promise<void>;
+  claimMessageForSend(input: {
+    attemptId: string;
+    mailboxId: string;
+    messageId: string;
+    recipientHash: string;
+    outboundMessageId: string;
+  }): Promise<"claimed" | "not_found" | "already_sent" | "busy">;
+  recordMessageSent(input: {
+    attemptId: string;
+    messageId: string;
+    providerMessageId: string;
+    sentAt: Date;
+    sentCopyStatus: SentCopyStatus;
+  }): Promise<void>;
+  recordMessageSendFailure(
+    attemptId: string,
+    messageId: string,
+    errorCode: string
+  ): Promise<void>;
+  markSentCopyStatus(
+    messageId: string,
+    status: "saved" | "failed"
+  ): Promise<void>;
+  markMessageSendFeishuSynced(messageId: string): Promise<void>;
   loadFeishuEmailIndex(): Promise<{
     entries: FeishuEmailIndexEntry[];
     refreshedAt?: Date;
@@ -180,6 +229,10 @@ type MailboxRow = {
   last_test_status: string | null;
   last_sync_at: Date | null;
   last_error_code: string | null;
+  smtp_enabled: boolean;
+  smtp_last_test_at: Date | null;
+  smtp_last_test_status: string | null;
+  smtp_last_error_code: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -202,6 +255,12 @@ type MessageRow = {
   ai_error_code: string | null;
   ai_model: string | null;
   ai_base_sync_status: AiBaseSyncStatus;
+  send_status: SendStatus;
+  sent_at: Date | null;
+  sent_message_id: string | null;
+  send_error_code: string | null;
+  sent_copy_status: SentCopyStatus;
+  send_feishu_sync_status: SendFeishuSyncStatus;
 };
 
 function messageFromRow(row: MessageRow): StoredMessage {
@@ -226,7 +285,13 @@ function messageFromRow(row: MessageRow): StoredMessage {
     ...(row.ai_analyzed_at ? { aiAnalyzedAt: row.ai_analyzed_at } : {}),
     ...(row.ai_error_code ? { aiErrorCode: row.ai_error_code } : {}),
     ...(row.ai_model ? { aiModel: row.ai_model } : {}),
-    aiBaseSyncStatus: row.ai_base_sync_status
+    aiBaseSyncStatus: row.ai_base_sync_status,
+    sendStatus: row.send_status,
+    ...(row.sent_at ? { sentAt: row.sent_at } : {}),
+    ...(row.sent_message_id ? { sentMessageId: row.sent_message_id } : {}),
+    ...(row.send_error_code ? { sendErrorCode: row.send_error_code } : {}),
+    sentCopyStatus: row.sent_copy_status,
+    sendFeishuSyncStatus: row.send_feishu_sync_status
   };
 }
 
@@ -243,6 +308,14 @@ function mailboxFromRow(row: MailboxRow): StoredMailbox {
     ...(row.last_test_status ? { lastTestStatus: row.last_test_status } : {}),
     ...(row.last_sync_at ? { lastSyncAt: row.last_sync_at } : {}),
     ...(row.last_error_code ? { lastErrorCode: row.last_error_code } : {}),
+    smtpEnabled: row.smtp_enabled,
+    ...(row.smtp_last_test_at ? { smtpLastTestAt: row.smtp_last_test_at } : {}),
+    ...(row.smtp_last_test_status
+      ? { smtpLastTestStatus: row.smtp_last_test_status }
+      : {}),
+    ...(row.smtp_last_error_code
+      ? { smtpLastErrorCode: row.smtp_last_error_code }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -283,6 +356,17 @@ export class PostgresMailboxRepository implements MailboxRepository {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `);
+    await this.pool.query(`
+      ALTER TABLE mailboxes
+        ADD COLUMN IF NOT EXISTS smtp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS smtp_last_test_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS smtp_last_test_status VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS smtp_last_error_code VARCHAR(80)
+    `);
+    await this.pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS mailboxes_one_smtp_pilot_idx
+      ON mailboxes ((smtp_enabled)) WHERE smtp_enabled = TRUE
     `);
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS email_messages (
@@ -334,6 +418,33 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS ai_error_code VARCHAR(80),
         ADD COLUMN IF NOT EXISTS ai_model VARCHAR(100),
         ADD COLUMN IF NOT EXISTS ai_base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    `);
+    await this.pool.query(`
+      ALTER TABLE email_messages
+        ADD COLUMN IF NOT EXISTS send_status VARCHAR(30) NOT NULL DEFAULT 'not_ready',
+        ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS sent_message_id VARCHAR(512),
+        ADD COLUMN IF NOT EXISTS send_error_code VARCHAR(80),
+        ADD COLUMN IF NOT EXISTS sent_copy_status VARCHAR(20) NOT NULL DEFAULT 'not_required',
+        ADD COLUMN IF NOT EXISTS send_feishu_sync_status VARCHAR(20) NOT NULL DEFAULT 'not_required'
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS email_send_attempts (
+        id UUID PRIMARY KEY,
+        message_id UUID NOT NULL REFERENCES email_messages(id) ON DELETE RESTRICT,
+        mailbox_id UUID NOT NULL REFERENCES mailboxes(id) ON DELETE RESTRICT,
+        status VARCHAR(20) NOT NULL,
+        recipient_hash CHAR(64) NOT NULL,
+        outbound_message_id VARCHAR(512) NOT NULL,
+        provider_message_id VARCHAR(512),
+        error_code VARCHAR(80),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS email_send_attempts_message_idx
+      ON email_send_attempts (message_id, created_at DESC)
     `);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
@@ -414,6 +525,50 @@ export class PostgresMailboxRepository implements MailboxRepository {
       [id, enabled]
     );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async saveSmtpConfig(id: string, encryptedConfig: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE mailboxes
+       SET encrypted_config = $2, smtp_enabled = FALSE,
+           smtp_last_test_at = NULL, smtp_last_test_status = NULL,
+           smtp_last_error_code = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [id, encryptedConfig]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async recordSmtpTest(
+    id: string,
+    status: "success" | "failed",
+    errorCode?: string
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE mailboxes
+       SET smtp_last_test_at = NOW(), smtp_last_test_status = $2,
+           smtp_last_error_code = $3, updated_at = NOW()
+       WHERE id = $1`,
+      [id, status, errorCode ?? null]
+    );
+  }
+
+  async setSmtpEnabled(
+    id: string,
+    enabled: boolean
+  ): Promise<"updated" | "conflict"> {
+    try {
+      const result = await this.pool.query(
+        `UPDATE mailboxes SET smtp_enabled = $2, updated_at = NOW()
+         WHERE id = $1`,
+        [id, enabled]
+      );
+      return (result.rowCount ?? 0) > 0 ? "updated" : "conflict";
+    } catch (error) {
+      const candidate = error as { code?: unknown };
+      if (candidate.code === "23505") return "conflict";
+      throw error;
+    }
   }
 
   async deleteMailboxIfEmpty(
@@ -542,7 +697,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_base_sync_status
+              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
        ORDER BY received_at DESC NULLS LAST, created_at DESC
@@ -561,7 +717,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_base_sync_status
+              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1 AND id = $2`,
       [mailboxId, messageId]
@@ -738,7 +895,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_base_sync_status
+              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
          AND (classification = 'unknown'
@@ -746,6 +904,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
                   AND (match_status <> 'matched'
                        OR base_sync_status <> 'synced'
                        OR ai_analysis_status = 'pending'
+                       OR (send_status = 'sent'
+                           AND send_feishu_sync_status = 'pending')
                        OR (matched_record_id IS NOT NULL
                            AND ai_analysis_status = 'completed'
                            AND ai_base_sync_status <> 'synced'))))
@@ -812,7 +972,15 @@ export class PostgresMailboxRepository implements MailboxRepository {
       `UPDATE email_messages
        SET ai_analysis_status = 'completed', encrypted_ai_analysis = $2,
            ai_analyzed_at = NOW(), ai_error_code = NULL, ai_model = $3,
-           ai_base_sync_status = 'pending'
+           ai_base_sync_status = 'pending',
+           send_status = CASE
+             WHEN send_status IN ('sending', 'sent') THEN send_status
+             ELSE 'awaiting_confirmation'
+           END,
+           send_error_code = CASE
+             WHEN send_status IN ('sending', 'sent') THEN send_error_code
+             ELSE NULL
+           END
        WHERE id = $1`,
       [messageId, encryptedAnalysis, model]
     );
@@ -834,6 +1002,156 @@ export class PostgresMailboxRepository implements MailboxRepository {
   async markMessageAnalysisSynced(messageId: string): Promise<void> {
     await this.pool.query(
       `UPDATE email_messages SET ai_base_sync_status = 'synced' WHERE id = $1`,
+      [messageId]
+    );
+  }
+
+  async claimMessageForSend(input: {
+    attemptId: string;
+    mailboxId: string;
+    messageId: string;
+    recipientHash: string;
+    outboundMessageId: string;
+  }): Promise<"claimed" | "not_found" | "already_sent" | "busy"> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query<{
+        send_status: SendStatus;
+        classification: EmailClassification;
+      }>(
+        `SELECT send_status, classification FROM email_messages
+         WHERE id = $1 AND mailbox_id = $2 FOR UPDATE`,
+        [input.messageId, input.mailboxId]
+      );
+      const row = current.rows[0];
+      if (!row || row.classification !== "creator_reply") {
+        await client.query("ROLLBACK");
+        return "not_found";
+      }
+      if (row.send_status === "sent") {
+        await client.query("ROLLBACK");
+        return "already_sent";
+      }
+      if (row.send_status === "sending") {
+        await client.query("ROLLBACK");
+        return "busy";
+      }
+      await client.query(
+        `UPDATE email_messages
+         SET send_status = 'sending', send_error_code = NULL,
+             sent_message_id = $2
+         WHERE id = $1`,
+        [input.messageId, input.outboundMessageId]
+      );
+      await client.query(
+        `INSERT INTO email_send_attempts
+           (id, message_id, mailbox_id, status, recipient_hash,
+            outbound_message_id)
+         VALUES ($1, $2, $3, 'sending', $4, $5)`,
+        [
+          input.attemptId,
+          input.messageId,
+          input.mailboxId,
+          input.recipientHash,
+          input.outboundMessageId
+        ]
+      );
+      await client.query("COMMIT");
+      return "claimed";
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordMessageSent(input: {
+    attemptId: string;
+    messageId: string;
+    providerMessageId: string;
+    sentAt: Date;
+    sentCopyStatus: SentCopyStatus;
+  }): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE email_messages
+         SET send_status = 'sent', sent_at = $2, sent_message_id = $3,
+             send_error_code = NULL, sent_copy_status = $4,
+             send_feishu_sync_status = CASE
+               WHEN matched_record_id IS NULL THEN 'not_required'
+               ELSE 'pending'
+             END
+         WHERE id = $1`,
+        [
+          input.messageId,
+          input.sentAt,
+          input.providerMessageId,
+          input.sentCopyStatus
+        ]
+      );
+      await client.query(
+        `UPDATE email_send_attempts
+         SET status = 'sent', provider_message_id = $2,
+             error_code = NULL, finished_at = $3
+         WHERE id = $1`,
+        [input.attemptId, input.providerMessageId, input.sentAt]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordMessageSendFailure(
+    attemptId: string,
+    messageId: string,
+    errorCode: string
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE email_messages
+         SET send_status = 'failed', send_error_code = $2
+         WHERE id = $1 AND send_status = 'sending'`,
+        [messageId, errorCode]
+      );
+      await client.query(
+        `UPDATE email_send_attempts
+         SET status = 'failed', error_code = $2, finished_at = NOW()
+         WHERE id = $1`,
+        [attemptId, errorCode]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markSentCopyStatus(
+    messageId: string,
+    status: "saved" | "failed"
+  ): Promise<void> {
+    await this.pool.query(
+      "UPDATE email_messages SET sent_copy_status = $2 WHERE id = $1",
+      [messageId, status]
+    );
+  }
+
+  async markMessageSendFeishuSynced(messageId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages
+       SET send_feishu_sync_status = 'synced' WHERE id = $1`,
       [messageId]
     );
   }

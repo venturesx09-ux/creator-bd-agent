@@ -144,7 +144,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "4.1.2",
+      version: "5.0.0",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -228,6 +228,81 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const result = await requireMailboxService().testConnection(mailboxId);
         response.status(200).json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/mailboxes/:mailboxId/smtp/config",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "mailboxId is invalid"
+          });
+          return;
+        }
+        const mailbox = await requireMailboxService().configureSmtp(
+          mailboxId,
+          request.body as unknown
+        );
+        response.status(200).json({ mailbox });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/mailboxes/:mailboxId/smtp/test",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        if (!validIdentifier(mailboxId, 128)) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "mailboxId is invalid"
+          });
+          return;
+        }
+        response.status(200).json(
+          await requireMailboxService().testSmtp(mailboxId)
+        );
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.patch(
+    "/api/admin/mailboxes/:mailboxId/smtp/status",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const mailboxId = request.params.mailboxId;
+        const body = request.body as unknown;
+        if (
+          !validIdentifier(mailboxId, 128) ||
+          !isPlainObject(body) ||
+          typeof body.enabled !== "boolean"
+        ) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "Provide a valid mailboxId and { enabled: boolean }"
+          });
+          return;
+        }
+        const mailbox = await requireMailboxService().setSmtpEnabled(
+          mailboxId,
+          body.enabled
+        );
+        response.status(200).json({ mailbox });
       } catch (error) {
         next(error);
       }
@@ -357,6 +432,50 @@ export function createApp(options: CreateAppOptions): express.Express {
             ...(!body.translate && typeof body.draftEn === "string"
               ? { draftEn: body.draftEn }
               : {})
+          }
+        );
+        response.status(200).json({ message });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/mailboxes/:mailboxId/messages/:messageId/send",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const { mailboxId, messageId } = request.params;
+        const body = request.body as unknown;
+        if (
+          !validIdentifier(mailboxId, 128) ||
+          !validIdentifier(messageId, 128) ||
+          !isPlainObject(body) ||
+          body.confirm !== true ||
+          typeof body.recipient !== "string" ||
+          body.recipient.length > 254 ||
+          typeof body.draftZh !== "string" ||
+          body.draftZh.trim().length < 1 ||
+          body.draftZh.length > 4_000 ||
+          typeof body.draftEn !== "string" ||
+          body.draftEn.trim().length < 1 ||
+          body.draftEn.length > 4_000
+        ) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "Explicit confirmation, recipient and both drafts are required"
+          });
+          return;
+        }
+        const message = await requireMailboxService().sendReply(
+          mailboxId,
+          messageId,
+          {
+            confirm: true,
+            recipient: body.recipient,
+            draftZh: body.draftZh,
+            draftEn: body.draftEn
           }
         );
         response.status(200).json({ message });
