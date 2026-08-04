@@ -21,6 +21,10 @@ const config: AppConfig = {
   mailboxEncryptionKey: Buffer.alloc(32, 1).toString("base64"),
   mailboxInitialSyncLimit: 20,
   mailboxSyncIntervalMinutes: 10,
+  openai: {
+    apiKey: "test-openai-key",
+    model: "gpt-5.6-terra"
+  },
   feishu: {
     appId: "test-app-id",
     appSecret: "test-app-secret",
@@ -126,6 +130,36 @@ describe("mailbox admin", () => {
       messages: []
     }),
     listMessages: async () => [],
+    analyzeMessage: async (_mailboxId, messageId) => ({
+      id: messageId,
+      uid: 1,
+      subject: "Re: collaboration",
+      from: ["Creator <creator@example.com>"],
+      fromAddresses: ["creator@example.com"],
+      to: ["test@example.com"],
+      messageId: "message@example.com",
+      references: [],
+      textPreview: "Our rate is USD 500.",
+      classification: "creator_reply",
+      matchStatus: "matched",
+      matchedRecordId: "rec_test",
+      aiAnalysisStatus: "completed",
+      aiBaseSyncStatus: "synced",
+      analysis: {
+        replyType: "interested_with_quote",
+        detectedLanguage: "en",
+        summaryZh: "达人感兴趣，报价500美元。",
+        quotedAmount: 500,
+        currency: "USD",
+        deliverables: ["1 Reel"],
+        timeline: "",
+        rightsRequests: [],
+        paymentRequests: [],
+        riskFlags: [],
+        recommendedAction: "review_quote",
+        replyDraftEn: "Hi, thank you for sharing your rate."
+      }
+    }),
     syncAllEnabled: async () => ({ attempted: 1, succeeded: 1, failed: 0 }),
     getDailySummary: async () => ({
       since: new Date(0).toISOString(), total: 1, matched: 1,
@@ -142,7 +176,7 @@ describe("mailbox admin", () => {
     const app = createApp({ config, mailboxService, logger: silentLogger });
     const response = await request(app).get("/admin").expect(200);
 
-    assert.match(response.text, /邮箱管理/u);
+    assert.match(response.text, /Creator BD工作台/u);
     assert.equal(response.text.includes(config.adminToken), false);
     assert.equal(response.text.includes(config.feishu.appSecret), false);
     assert.match(
@@ -152,7 +186,20 @@ describe("mailbox admin", () => {
     assert.match(response.text, /全部同步/u);
     assert.match(response.text, /刷新概览/u);
     assert.match(ADMIN_JS, /sessionStorage/u);
+    assert.match(ADMIN_JS, /重新分析/u);
     assert.doesNotThrow(() => new Function(ADMIN_JS));
+  });
+
+  it("protects and runs manual AI analysis", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    const url = `/api/admin/mailboxes/${mailbox.id}/messages/message_test/analyze`;
+    await request(app).post(url).expect(401);
+    const response = await request(app)
+      .post(url)
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .expect(200);
+    assert.equal(response.body.message.analysis.quotedAmount, 500);
+    assert.equal(response.body.message.aiBaseSyncStatus, "synced");
   });
 
   it("protects mailbox APIs and returns only safe mailbox metadata", async () => {

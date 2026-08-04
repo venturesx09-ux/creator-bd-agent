@@ -17,7 +17,12 @@ import {
   parseFeishuCallback,
   verifyFeishuSignature
 } from "./feishu-events.js";
-import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from "./admin-assets.js";
+import {
+  ADMIN_CSS,
+  ADMIN_CSS_EXTRA,
+  ADMIN_HTML,
+  ADMIN_JS
+} from "./admin-assets.js";
 import type { FeishuProcessingProgress } from "./feishu-progress.js";
 import {
   MailboxServiceError,
@@ -138,7 +143,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "3.3.1",
+      version: "4.0.0",
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });
@@ -166,7 +171,7 @@ export function createApp(options: CreateAppOptions): express.Express {
 
   app.get("/admin/styles.css", (_request, response) => {
     adminHeaders(response, "text/css; charset=utf-8");
-    response.status(200).send(ADMIN_CSS);
+    response.status(200).send(`${ADMIN_CSS}\n${ADMIN_CSS_EXTRA}`);
   });
 
   app.get("/admin/app.js", (_request, response) => {
@@ -279,6 +284,30 @@ export function createApp(options: CreateAppOptions): express.Express {
     async (_request, response, next) => {
       try {
         response.status(200).json(await requireMailboxService().getDailySummary());
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/mailboxes/:mailboxId/messages/:messageId/analyze",
+    adminOnly,
+    async (request, response, next) => {
+      try {
+        const { mailboxId, messageId } = request.params;
+        if (!validIdentifier(mailboxId, 128) || !validIdentifier(messageId, 128)) {
+          response.status(400).json({
+            error: "invalid_request",
+            message: "mailboxId or messageId is invalid"
+          });
+          return;
+        }
+        const message = await requireMailboxService().analyzeMessage(
+          mailboxId,
+          messageId
+        );
+        response.status(200).json({ message });
       } catch (error) {
         next(error);
       }

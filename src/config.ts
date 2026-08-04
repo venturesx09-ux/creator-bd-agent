@@ -9,6 +9,10 @@ export type AppConfig = {
   mailboxEncryptionKey: string;
   mailboxInitialSyncLimit: number;
   mailboxSyncIntervalMinutes: number;
+  openai: {
+    apiKey: string;
+    model: string;
+  };
   feishu: {
     appId: string;
     appSecret: string;
@@ -109,6 +113,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     mailboxSyncIntervalMinutes: parseSyncInterval(
       env.MAILBOX_SYNC_INTERVAL_MINUTES
     ),
+    openai: {
+      apiKey: required(env, "OPENAI_API_KEY"),
+      model: optional(env, "OPENAI_MODEL") ?? "gpt-5.6-terra"
+    },
     feishu: {
       appId: required(env, "FEISHU_APP_ID"),
       appSecret: required(env, "FEISHU_APP_SECRET"),
@@ -126,6 +134,7 @@ export function configurationStatus(config: AppConfig): {
   callbackSecurityConfigured: boolean;
   mailboxStorageConfigured: boolean;
   unmatchedTableConfigured: boolean;
+  openaiConfigured: boolean;
 } {
   return {
     feishuCoreConfigured: Boolean(
@@ -140,6 +149,7 @@ export function configurationStatus(config: AppConfig): {
     mailboxStorageConfigured: Boolean(
       config.database.url && config.mailboxEncryptionKey
     ),
-    unmatchedTableConfigured: Boolean(config.feishu.unmatchedTableId)
+    unmatchedTableConfigured: Boolean(config.feishu.unmatchedTableId),
+    openaiConfigured: Boolean(config.openai.apiKey && config.openai.model)
   };
 }

@@ -1,6 +1,16 @@
-# Creator BD Agent — Phase 3.3.1
+# Creator BD Agent — Phase 4.0.0
 
-这是Creator BD Agent的第三阶段后台。在第二阶段全部能力之上新增：
+这是Creator BD Agent第四阶段的“AI邮件分析工作台”。它保留第三阶段的邮箱只读同步与飞书匹配，并新增：
+
+- 使用OpenAI Responses API和结构化输出分析达人回复；
+- 自动生成中文摘要，提取报价、币种、交付内容、档期、权益、付款要求和风险；
+- 自动生成需要人工确认的英文回复草稿，不自动发送；
+- AI分析结果使用AES-256-GCM加密后保存到PostgreSQL；
+- 匹配达人后，把`AI中文摘要`、`AI回复草稿`、`报价金额`、`报价币种`、`权益要求`写回飞书；
+- 管理页提供原邮件/AI结果双栏查看和“AI分析/重新分析”按钮；
+- OpenAI请求不持久化到OpenAI服务（`store: false`），API Key不进入代码、响应或日志；
+
+已有基础能力包括：
 
 - Render服务可以正常运行；
 - 飞书应用可以自动获取`tenant_access_token`；
@@ -52,6 +62,7 @@
 | POST | `/api/admin/mailboxes/:mailboxId/test` | ADMIN_TOKEN | 测试IMAP连接 |
 | POST | `/api/admin/mailboxes/:mailboxId/sync` | ADMIN_TOKEN | 手动执行IMAP只读同步 |
 | GET | `/api/admin/mailboxes/:mailboxId/messages` | ADMIN_TOKEN | 查看已同步邮件摘要 |
+| POST | `/api/admin/mailboxes/:mailboxId/messages/:messageId/analyze` | ADMIN_TOKEN | 手动分析或重新分析一封达人回复 |
 | PATCH | `/api/admin/mailboxes/:mailboxId/status` | ADMIN_TOKEN | 启用或停用邮箱 |
 | DELETE | `/api/admin/mailboxes/:mailboxId` | ADMIN_TOKEN | 删除没有同步记录的空邮箱 |
 | GET | `/api/admin/daily-summary` | ADMIN_TOKEN | 过去24小时分类与匹配统计 |
@@ -86,6 +97,8 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `MAILBOX_ENCRYPTION_KEY` | 是 | 独立的32字节Base64密钥；Blueprint自动生成 |
 | `MAILBOX_INITIAL_SYNC_LIMIT` | 否 | 首次同步最近多少封，默认20，最大100 |
 | `MAILBOX_SYNC_INTERVAL_MINUTES` | 否 | 自动只读同步间隔，默认2，可设置1至60 |
+| `OPENAI_API_KEY` | 是 | OpenAI API Key，只保存于Render Environment |
+| `OPENAI_MODEL` | 否 | 分析模型，默认`gpt-5.6-terra` |
 | `PORT` | 否 | 默认3000；Render会自动提供 |
 
 不要保存临时`tenant_access_token`。程序会使用App ID和App Secret自动获取并缓存。
@@ -99,7 +112,7 @@ npm ci
 npm run check
 ```
 
-测试使用模拟飞书API和模拟邮箱服务，不需要真实密钥，不连接真实邮箱，也不会发送消息。
+测试使用模拟飞书API、模拟邮箱服务和模拟AI分析，不需要真实密钥，不连接真实邮箱，不调用OpenAI，也不会发送消息。
 
 如需用本地环境手动启动，可创建不提交的`.env`，然后运行：
 
@@ -129,7 +142,7 @@ http://localhost:3000/health
 4. Render会读取根目录的`render.yaml`。
 5. Blueprint会创建`creator-bd-agent-db` PostgreSQL数据库，并通过内部网络注入`DATABASE_URL`；
 6. Blueprint会自动生成`ADMIN_TOKEN`和独立的`MAILBOX_ENCRYPTION_KEY`；
-7. 对于已经存在的Blueprint，上传3.0代码后在Render的Blueprint页面点击`Sync Blueprint`；
+7. 对于已经存在的Blueprint，上传4.0代码后在Render的Blueprint页面点击`Sync Blueprint`；
 8. 等数据库为`Available`、服务为`Live`；
 9. 打开Render生成的域名加`/health`。
 
@@ -163,7 +176,7 @@ https://你的Render域名/admin
 4. 点击`加密保存邮箱`；
 5. 点击`测试IMAP`，确认连接成功；
 6. 点击`只读同步`；系统读取新UID，并回抓最多200封尚未入库的未读邮件；
-7. 点击`查看最近邮件`检查主题、发件人和正文预览。
+7. 点击`查看最近邮件`检查主题、发件人、原文和AI结果；旧邮件可点击`AI分析`，已分析邮件可点击`重新分析`。
 8. 查看顶部“过去24小时”，确认分类和飞书匹配数量；
 9. 错误的重复邮箱可点击`停用`；若从未同步过邮件，可点击`删除`。
 
@@ -183,7 +196,23 @@ https://你的Render域名/admin
 - `退信`：识别Mailer-Daemon、Postmaster及投递失败主题；
 - `批量/通知`：识别Precedence、List-ID和no-reply等。
 
-每次同步后，程序首先将邮件发件邮箱与飞书Base各字段中出现的邮箱做不区分大小写的精确匹配。邮箱无法匹配时，再从回复正文引用历史中提取`Hi + 达人ID`，与飞书`达人ID`字段做唯一匹配。邮箱和达人ID索引都只以不可逆SHA-256哈希保存在PostgreSQL，重启后直接复用，并每30分钟后台刷新，也可以在管理页手动立即刷新。升级前同步的旧邮件会自动重新匹配；未匹配邮件会在后续同步时重试，并在配置`FEISHU_UNMATCHED_TABLE_ID`后写入独立子表。程序在PostgreSQL保存对应子表记录ID，因此重复同步只更新原行；邮件以后匹配成功时，原行自动更新处理状态、最终记录ID和解决时间。匹配成功后会安全写回“最近发件邮箱、最后联系时间、邮件同步状态、邮件分类”，并只把早期合作阶段推进为“已回复”。如果引用历史被对方完全删除，当前仅同步INBOX的版本无法还原首封发件内容。业务含义分类（感兴趣、报价、拒绝等）留到第四阶段接入AI后处理。
+每次同步后，程序首先将邮件发件邮箱与飞书Base各字段中出现的邮箱做不区分大小写的精确匹配。邮箱无法匹配时，再从回复正文引用历史中提取`Hi + 达人ID`，与飞书`达人ID`字段做唯一匹配。邮箱和达人ID索引都只以不可逆SHA-256哈希保存在PostgreSQL，重启后直接复用，并每30分钟后台刷新，也可以在管理页手动立即刷新。升级前同步的旧邮件会自动重新匹配；未匹配邮件会在后续同步时重试，并在配置`FEISHU_UNMATCHED_TABLE_ID`后写入独立子表。程序在PostgreSQL保存对应子表记录ID，因此重复同步只更新原行；邮件以后匹配成功时，原行自动更新处理状态、最终记录ID和解决时间。匹配成功后会安全写回“最近发件邮箱、最后联系时间、邮件同步状态、邮件分类”，并只把早期合作阶段推进为“已回复”。如果引用历史被对方完全删除，当前仅同步INBOX的版本无法还原首封发件内容。
+
+## 第四阶段AI分析
+
+新同步的`达人回复`会在后台自动进入AI分析；升级前已存在的历史邮件不会批量消耗API额度，可在工作台逐封点击`AI分析`。分析使用固定结构，不依靠自由文本猜字段。程序只提取邮件中明确出现的信息，并禁止草稿直接接受报价、承诺付款、同意版权/排他或修改正式条款。
+
+飞书主表需要存在以下字段，名称和类型应完全一致：
+
+| 字段 | 推荐类型 |
+|---|---|
+| `AI中文摘要` | 多行文本 |
+| `AI回复草稿` | 多行文本 |
+| `报价金额` | 数字 |
+| `报价币种` | 单选（提前加入USD、EUR、GBP等选项） |
+| `权益要求` | 多行文本 |
+
+如果AI已经分析成功、但飞书某个字段不存在或单选值不可用，工作台仍会显示结果，并显示`等待写回/写回失败`；修好字段后点击`重新分析`即可再次写回。所有英文草稿只供人工审核，本阶段没有SMTP代码。
 
 ## 配置飞书消息接收
 
@@ -296,7 +325,7 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - 确认服务器、端口和TLS方式完全匹配；
 - 部分企业邮箱会限制海外服务器IP，需要向服务商申请放行。
 
-## 第三阶段验收
+## 第四阶段验收
 
 - [ ] `npm run check`全部通过；
 - [ ] GitHub仓库为Private；
@@ -316,8 +345,13 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] 一个试点邮箱通过IMAP连接测试；
 - [ ] 能以只读模式同步最近邮件且不会修改已读状态；
 - [ ] 重复同步不会重复保存同一封邮件；
-- [ ] `/health`显示版本`3.3.1`；
+- [ ] `/health`显示版本`4.0.0`且`openaiConfigured: true`；
 - [ ] 管理页顶部显示过去24小时摘要；
+- [ ] 打开最近邮件后可看到原邮件与AI分析双栏；
+- [ ] 一封达人回复能生成中文摘要、报价提取和英文草稿；
+- [ ] 匹配成功的邮件能把AI字段写回飞书；
+- [ ] 页面和日志中不显示`OPENAI_API_KEY`；
+- [ ] 本阶段没有SMTP配置，也不能发送邮件。
 - [ ] 邮件显示规则分类和飞书匹配状态；
 - [ ] 错误邮箱可以停用，空邮箱可以安全删除；
 - [ ] Render环境存在`MAILBOX_SYNC_INTERVAL_MINUTES=10`；

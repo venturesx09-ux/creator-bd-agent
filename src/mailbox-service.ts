@@ -4,11 +4,15 @@ import { simpleParser } from "mailparser";
 import type {
   DailySummary,
   EmailClassification,
+  AiAnalysisStatus,
+  AiBaseSyncStatus,
   MatchReason,
   MailboxRepository,
   StoredMailbox,
   StoredMessageInput
 } from "./database.js";
+import { EmailAnalysisSchema, type EmailAnalysis } from "./email-analysis.js";
+import type { EmailAnalysisProcessor } from "./email-analysis-processor.js";
 import { SecretBox } from "./secret-box.js";
 
 const MAX_SOURCE_BYTES = 256 * 1024;
@@ -68,6 +72,12 @@ export type MessageSummary = {
   mailboxLabel?: string;
   mailboxEmail?: string;
   project?: string;
+  aiAnalysisStatus?: AiAnalysisStatus;
+  analysis?: EmailAnalysis;
+  aiAnalyzedAt?: string;
+  aiErrorCode?: string;
+  aiModel?: string;
+  aiBaseSyncStatus?: AiBaseSyncStatus;
 };
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
@@ -109,6 +119,7 @@ export interface MailboxServiceLike {
     messages: MessageSummary[];
   }>;
   listMessages(id: string, limit: number): Promise<MessageSummary[]>;
+  analyzeMessage(id: string, messageId: string): Promise<MessageSummary>;
   syncAllEnabled(): Promise<{
     attempted: number;
     succeeded: number;
@@ -369,7 +380,8 @@ export class MailboxService implements MailboxServiceLike {
     private readonly secretBox: SecretBox,
     private readonly initialSyncLimit: number,
     private readonly imapFactory: ImapFactory = (options) => new ImapFlow(options),
-    private readonly creatorMatcher?: CreatorMatcher
+    private readonly creatorMatcher?: CreatorMatcher,
+    private readonly analysisProcessor?: EmailAnalysisProcessor
   ) {}
 
   async listMailboxes(): Promise<MailboxSummary[]> {
@@ -637,6 +649,45 @@ export class MailboxService implements MailboxServiceLike {
     return rows.map((row) => this.messageFromStored(row));
   }
 
+  async analyzeMessage(id: string, messageId: string): Promise<MessageSummary> {
+    const mailbox = await this.requireMailbox(id);
+    const row = await this.repository.getMessage(id, messageId);
+    if (!row) {
+      throw new MailboxServiceError("Message not found", 404, "MESSAGE_NOT_FOUND");
+    }
+    if (row.classification !== "creator_reply") {
+      throw new MailboxServiceError(
+        "Only creator replies can be analyzed",
+        409,
+        "MESSAGE_NOT_ANALYZABLE"
+      );
+    }
+    if (!this.analysisProcessor) {
+      throw new MailboxServiceError(
+        "AI analysis service is unavailable",
+        503,
+        "AI_ANALYSIS_UNAVAILABLE"
+      );
+    }
+    const connection = this.connectionConfig(mailbox);
+    const message: MessageSummary = {
+      ...this.messageFromStored(row),
+      mailboxLabel: mailbox.label,
+      mailboxEmail: connection.emailAddress,
+      project: mailbox.brand
+    };
+    try {
+      await this.analysisProcessor.process(message, true);
+      return message;
+    } catch (error) {
+      throw new MailboxServiceError(
+        "AI analysis failed. Please try again later.",
+        502,
+        error instanceof Error ? error.message : "OPENAI_ANALYSIS_FAILED"
+      );
+    }
+  }
+
   private messageFromStored(row: import("./database.js").StoredMessage): MessageSummary {
     const payload = this.secretBox.decrypt<LegacyEncryptedMessagePayload>(
       row.encryptedPayload
@@ -645,6 +696,17 @@ export class MailboxService implements MailboxServiceLike {
     const fromAddresses = payload.fromAddresses?.length
       ? payload.fromAddresses
       : addressesFromFormatted(from);
+    let analysis: EmailAnalysis | undefined;
+    if (row.encryptedAiAnalysis) {
+      try {
+        const parsed = EmailAnalysisSchema.safeParse(
+          this.secretBox.decrypt<unknown>(row.encryptedAiAnalysis)
+        );
+        if (parsed.success) analysis = parsed.data;
+      } catch {
+        analysis = undefined;
+      }
+    }
     return {
       id: row.id,
       uid: row.uid,
@@ -660,7 +722,15 @@ export class MailboxService implements MailboxServiceLike {
       classification: row.classification,
       matchStatus: row.baseSyncStatus === "synced" ? row.matchStatus : "pending",
       ...(row.matchedRecordId ? { matchedRecordId: row.matchedRecordId } : {}),
-      ...(row.matchReason ? { matchReason: row.matchReason } : {})
+      ...(row.matchReason ? { matchReason: row.matchReason } : {}),
+      aiAnalysisStatus: row.aiAnalysisStatus,
+      ...(analysis ? { analysis } : {}),
+      ...(row.aiAnalyzedAt
+        ? { aiAnalyzedAt: row.aiAnalyzedAt.toISOString() }
+        : {}),
+      ...(row.aiErrorCode ? { aiErrorCode: row.aiErrorCode } : {}),
+      ...(row.aiModel ? { aiModel: row.aiModel } : {}),
+      aiBaseSyncStatus: row.aiBaseSyncStatus
     };
   }
 
@@ -692,6 +762,27 @@ export class MailboxService implements MailboxServiceLike {
     const candidates = messagesNeedingMatch(messages);
     if (this.creatorMatcher && candidates.length) {
       await this.creatorMatcher.matchMessages(candidates);
+    }
+    if (this.analysisProcessor) {
+      for (const message of messages) {
+        const shouldAnalyze =
+          message.classification === "creator_reply" &&
+          (message.aiAnalysisStatus === "pending" ||
+            (message.aiAnalysisStatus === "completed" &&
+              message.matchedRecordId !== undefined &&
+              message.aiBaseSyncStatus !== "synced"));
+        if (!shouldAnalyze) continue;
+        try {
+          await this.analysisProcessor.process(message);
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "mailbox_background_ai_failed",
+            mailboxId,
+            messageId: message.id,
+            code: error instanceof Error ? error.message : "OPENAI_ANALYSIS_FAILED"
+          }));
+        }
+      }
     }
   }
 

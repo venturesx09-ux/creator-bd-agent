@@ -7,12 +7,22 @@ import { SecretBox } from "./secret-box.js";
 import { FeishuClient } from "./feishu-client.js";
 import { FeishuCreatorMatcher } from "./feishu-creator-matcher.js";
 import { FeishuProgressTracker } from "./feishu-progress.js";
+import { OpenAIEmailAnalysisClient } from "./email-analysis.js";
+import { DefaultEmailAnalysisProcessor } from "./email-analysis-processor.js";
 
 async function start(): Promise<void> {
   const config = loadConfig();
   const repository = new PostgresMailboxRepository(config.database);
   await repository.initialize();
   const feishuClient = new FeishuClient({ config: config.feishu });
+  const secretBox = new SecretBox(config.mailboxEncryptionKey);
+  const analysisClient = new OpenAIEmailAnalysisClient(config.openai);
+  const analysisProcessor = new DefaultEmailAnalysisProcessor(
+    analysisClient,
+    repository,
+    secretBox,
+    feishuClient
+  );
   const feishuProgress = new FeishuProgressTracker();
   const feishuMatcher = new FeishuCreatorMatcher(
     feishuClient,
@@ -21,10 +31,11 @@ async function start(): Promise<void> {
   );
   const mailboxService = new MailboxService(
     repository,
-    new SecretBox(config.mailboxEncryptionKey),
+    secretBox,
     config.mailboxInitialSyncLimit,
     undefined,
-    feishuMatcher
+    feishuMatcher,
+    analysisProcessor
   );
   const scheduler = new MailboxSyncScheduler(
     mailboxService,

@@ -507,7 +507,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       creatorIds: creatorIdIndexFromPersistentEntries(creatorIdEntries)
     };
     this.cachedIndex = { value, expiresAt: Date.now() + INDEX_FRESHNESS_MS };
-    this.progress.indexReady(emailEntries.length, "feishu");
+    this.progress.indexReady(records.length, "feishu");
     return value;
   }
 }

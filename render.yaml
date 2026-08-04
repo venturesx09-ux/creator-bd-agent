@@ -35,6 +35,10 @@ services:
         value: "20"
       - key: MAILBOX_SYNC_INTERVAL_MINUTES
         value: "2"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-terra
 
 databases:
   - name: creator-bd-agent-db

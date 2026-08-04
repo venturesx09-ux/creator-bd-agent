@@ -38,6 +38,12 @@ export type EmailClassification =
 
 export type MatchStatus = "matched" | "unmatched" | "pending";
 export type BaseSyncStatus = "pending" | "synced";
+export type AiAnalysisStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "skipped";
+export type AiBaseSyncStatus = "pending" | "synced";
 export type MatchReason =
   | "email_exact"
   | "history_creator_id"
@@ -57,6 +63,12 @@ export type StoredMessage = {
   baseSyncStatus: BaseSyncStatus;
   matchReason?: MatchReason;
   unmatchedRecordId?: string;
+  aiAnalysisStatus: AiAnalysisStatus;
+  encryptedAiAnalysis?: string;
+  aiAnalyzedAt?: Date;
+  aiErrorCode?: string;
+  aiModel?: string;
+  aiBaseSyncStatus: AiBaseSyncStatus;
 };
 
 export type DailySummary = {
@@ -132,6 +144,14 @@ export interface MailboxRepository {
   ): Promise<void>;
   getUnmatchedRecordId(messageId: string): Promise<string | undefined>;
   setUnmatchedRecordId(messageId: string, recordId: string): Promise<void>;
+  getMessage(mailboxId: string, messageId: string): Promise<StoredMessage | undefined>;
+  saveMessageAnalysis(
+    messageId: string,
+    encryptedAnalysis: string,
+    model: string
+  ): Promise<void>;
+  recordMessageAnalysisFailure(messageId: string, errorCode: string): Promise<void>;
+  markMessageAnalysisSynced(messageId: string): Promise<void>;
   loadFeishuEmailIndex(): Promise<{
     entries: FeishuEmailIndexEntry[];
     refreshedAt?: Date;
@@ -175,7 +195,39 @@ type MessageRow = {
   base_sync_status: BaseSyncStatus;
   match_reason: MatchReason | null;
   unmatched_record_id: string | null;
+  ai_analysis_status: AiAnalysisStatus;
+  encrypted_ai_analysis: string | null;
+  ai_analyzed_at: Date | null;
+  ai_error_code: string | null;
+  ai_model: string | null;
+  ai_base_sync_status: AiBaseSyncStatus;
 };
+
+function messageFromRow(row: MessageRow): StoredMessage {
+  return {
+    id: row.id,
+    uid: Number.parseInt(row.uid, 10),
+    encryptedPayload: row.encrypted_payload,
+    ...(row.received_at ? { receivedAt: row.received_at } : {}),
+    createdAt: row.created_at,
+    classification: row.classification,
+    matchStatus: row.match_status,
+    ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
+    baseSyncStatus: row.base_sync_status,
+    ...(row.match_reason ? { matchReason: row.match_reason } : {}),
+    ...(row.unmatched_record_id
+      ? { unmatchedRecordId: row.unmatched_record_id }
+      : {}),
+    aiAnalysisStatus: row.ai_analysis_status,
+    ...(row.encrypted_ai_analysis
+      ? { encryptedAiAnalysis: row.encrypted_ai_analysis }
+      : {}),
+    ...(row.ai_analyzed_at ? { aiAnalyzedAt: row.ai_analyzed_at } : {}),
+    ...(row.ai_error_code ? { aiErrorCode: row.ai_error_code } : {}),
+    ...(row.ai_model ? { aiModel: row.ai_model } : {}),
+    aiBaseSyncStatus: row.ai_base_sync_status
+  };
+}
 
 function mailboxFromRow(row: MailboxRow): StoredMailbox {
   return {
@@ -257,6 +309,30 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending',
         ADD COLUMN IF NOT EXISTS match_reason VARCHAR(64),
         ADD COLUMN IF NOT EXISTS unmatched_record_id VARCHAR(128)
+    `);
+    await this.pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'email_messages'
+            AND column_name = 'ai_analysis_status'
+        ) THEN
+          ALTER TABLE email_messages
+            ADD COLUMN ai_analysis_status VARCHAR(20) NOT NULL DEFAULT 'skipped';
+          ALTER TABLE email_messages
+            ALTER COLUMN ai_analysis_status SET DEFAULT 'pending';
+        END IF;
+      END $$
+    `);
+    await this.pool.query(`
+      ALTER TABLE email_messages
+        ADD COLUMN IF NOT EXISTS encrypted_ai_analysis TEXT,
+        ADD COLUMN IF NOT EXISTS ai_analyzed_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS ai_error_code VARCHAR(80),
+        ADD COLUMN IF NOT EXISTS ai_model VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS ai_base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
     `);
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS email_messages_daily_summary_idx
@@ -463,28 +539,34 @@ export class PostgresMailboxRepository implements MailboxRepository {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
-              match_reason, unmatched_record_id
+              match_reason, unmatched_record_id, ai_analysis_status,
+              encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_base_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
        ORDER BY received_at DESC NULLS LAST, created_at DESC
        LIMIT $2`,
       [mailboxId, limit]
     );
-    return result.rows.map((row) => ({
-      id: row.id,
-      uid: Number.parseInt(row.uid, 10),
-      encryptedPayload: row.encrypted_payload,
-      ...(row.received_at ? { receivedAt: row.received_at } : {}),
-      createdAt: row.created_at,
-      classification: row.classification,
-      matchStatus: row.match_status,
-      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
-      baseSyncStatus: row.base_sync_status,
-      ...(row.match_reason ? { matchReason: row.match_reason } : {}),
-      ...(row.unmatched_record_id
-        ? { unmatchedRecordId: row.unmatched_record_id }
-        : {})
-    }));
+    return result.rows.map(messageFromRow);
+  }
+
+  async getMessage(
+    mailboxId: string,
+    messageId: string
+  ): Promise<StoredMessage | undefined> {
+    const result = await this.pool.query<MessageRow>(
+      `SELECT id, uid, encrypted_payload, received_at, created_at,
+              classification, match_status, matched_record_id, base_sync_status,
+              match_reason, unmatched_record_id, ai_analysis_status,
+              encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_base_sync_status
+       FROM email_messages
+       WHERE mailbox_id = $1 AND id = $2`,
+      [mailboxId, messageId]
+    );
+    const row = result.rows[0];
+    return row ? messageFromRow(row) : undefined;
   }
 
   async listKnownUids(
@@ -653,30 +735,22 @@ export class PostgresMailboxRepository implements MailboxRepository {
     const result = await this.pool.query<MessageRow>(
       `SELECT id, uid, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
-              match_reason, unmatched_record_id
+              match_reason, unmatched_record_id, ai_analysis_status,
+              encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_base_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
          AND (classification = 'unknown' OR match_status <> 'matched'
-              OR base_sync_status <> 'synced')
+              OR base_sync_status <> 'synced'
+              OR (classification = 'creator_reply' AND ai_analysis_status = 'pending')
+              OR (matched_record_id IS NOT NULL
+                  AND ai_analysis_status = 'completed'
+                  AND ai_base_sync_status <> 'synced'))
        ORDER BY received_at DESC NULLS LAST, created_at DESC
        LIMIT $2`,
       [mailboxId, limit]
     );
-    return result.rows.map((row) => ({
-      id: row.id,
-      uid: Number.parseInt(row.uid, 10),
-      encryptedPayload: row.encrypted_payload,
-      ...(row.received_at ? { receivedAt: row.received_at } : {}),
-      createdAt: row.created_at,
-      classification: row.classification,
-      matchStatus: row.match_status,
-      ...(row.matched_record_id ? { matchedRecordId: row.matched_record_id } : {}),
-      baseSyncStatus: row.base_sync_status,
-      ...(row.match_reason ? { matchReason: row.match_reason } : {}),
-      ...(row.unmatched_record_id
-        ? { unmatchedRecordId: row.unmatched_record_id }
-        : {})
-    }));
+    return result.rows.map(messageFromRow);
   }
 
   async updateMessageClassification(
@@ -723,6 +797,41 @@ export class PostgresMailboxRepository implements MailboxRepository {
     await this.pool.query(
       "UPDATE email_messages SET unmatched_record_id = $2 WHERE id = $1",
       [messageId, recordId]
+    );
+  }
+
+  async saveMessageAnalysis(
+    messageId: string,
+    encryptedAnalysis: string,
+    model: string
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages
+       SET ai_analysis_status = 'completed', encrypted_ai_analysis = $2,
+           ai_analyzed_at = NOW(), ai_error_code = NULL, ai_model = $3,
+           ai_base_sync_status = 'pending'
+       WHERE id = $1`,
+      [messageId, encryptedAnalysis, model]
+    );
+  }
+
+  async recordMessageAnalysisFailure(
+    messageId: string,
+    errorCode: string
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages
+       SET ai_analysis_status = 'failed', ai_error_code = $2,
+           ai_analyzed_at = NOW()
+       WHERE id = $1`,
+      [messageId, errorCode]
+    );
+  }
+
+  async markMessageAnalysisSynced(messageId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages SET ai_base_sync_status = 'synced' WHERE id = $1`,
+      [messageId]
     );
   }
 

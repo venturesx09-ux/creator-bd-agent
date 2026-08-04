@@ -3,7 +3,7 @@ export const ADMIN_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Creator BD Agent 邮箱管理</title>
+  <title>Creator BD Agent 工作台</title>
   <link rel="stylesheet" href="/admin/styles.css">
 </head>
 <body>
@@ -11,10 +11,10 @@ export const ADMIN_HTML = `<!doctype html>
     <header>
       <div>
         <p class="eyebrow">CREATOR BD AGENT</p>
-        <h1>邮箱管理</h1>
-        <p class="muted">第三阶段自动只读同步、分类并匹配飞书达人，不会发送邮件。</p>
+        <h1>Creator BD工作台</h1>
+        <p class="muted">自动只读同步、匹配飞书并生成AI中文摘要与英文回复草稿；不会发送邮件。</p>
       </div>
-      <span class="badge">READ ONLY</span>
+      <span class="badge">AI ASSISTED</span>
     </header>
 
     <section class="panel" id="login-panel">
@@ -89,7 +89,7 @@ export const ADMIN_HTML = `<!doctype html>
 
       <section class="panel" id="message-panel" hidden>
         <div class="section-heading">
-          <div><h2 id="message-title">最近邮件</h2><p class="muted">只显示已同步并加密保存的邮件摘要。</p></div>
+          <div><h2 id="message-title">最近邮件</h2><p class="muted">左侧查看原邮件，右侧查看AI分析和飞书写回状态；草稿不会自动发送。</p></div>
           <div class="heading-actions"><button id="refresh-messages" class="secondary" type="button">刷新邮件</button><button id="close-messages" class="secondary" type="button">关闭</button></div>
         </div>
         <div id="message-list" class="messages"></div>
@@ -103,6 +103,8 @@ export const ADMIN_HTML = `<!doctype html>
 </html>`;
 
 export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading,.heading-actions,.progress-line{display:flex;gap:12px;align-items:center}.section-heading,.progress-line{justify-content:space-between}.section-heading{margin-bottom:18px}.heading-actions{flex-wrap:wrap;justify-content:flex-end}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.progress-panel{background:#f7f7f4;border:1px solid #e8e8e3;border-radius:12px;padding:14px;margin-bottom:16px}.progress-panel.always-visible{margin-bottom:12px}.progress-panel progress{width:100%;height:12px;margin:10px 0 6px;accent-color:#147a39}.progress-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}.progress-stats div{background:#f7f7f4;border-radius:10px;padding:12px}.progress-stats strong{display:block;font-size:22px}.progress-stats span{font-size:11px;color:#696969}.progress-updated{margin-top:12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.progress-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.row,.section-heading{align-items:stretch;flex-direction:column}.row button{width:100%}.heading-actions{justify-content:flex-start}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
+
+export const ADMIN_CSS_EXTRA = `main{width:min(1180px,calc(100% - 32px))}.messages{gap:14px}.message{border:1px solid #e8e8e3;border-radius:14px;padding:17px;background:#fff}.message:first-child{border-top:1px solid #e8e8e3}.message h3{font-size:16px}.message h4{font-size:13px;margin:0 0 10px}.message-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}.message-column{background:#f7f7f4;border-radius:12px;padding:14px;min-width:0}.message-column.ai{background:#f3f7ff;border:1px solid #dae5fb}.message-body{max-height:300px;overflow:auto}.analysis-row{border-top:1px solid rgba(0,0,0,.08);padding-top:8px;margin-top:8px}.analysis-row strong{display:block;font-size:11px;color:#6b6b6b;margin-bottom:3px}.draft{background:#fff;border-radius:9px;padding:10px;border:1px solid #dce5f5;max-height:320px;overflow:auto}.pill.success{background:#eaf7ee;color:#147a39}.pill.failed{background:#fff0ef;color:#a32119}.pill.pending{background:#fff7df;color:#835f00}@media(max-width:760px){.message-columns{grid-template-columns:1fr}}`;
 
 export const ADMIN_JS = `(() => {
   const tokenStorageKey = 'creator-bd-agent-admin-token';
@@ -238,7 +240,7 @@ export const ADMIN_JS = `(() => {
       refreshing: '正在后台刷新飞书索引', ready: '飞书索引已就绪',
       failed: '飞书索引读取失败'
     };
-    const source = progress.index.source === 'database' ? '数据库缓存' : '飞书Base';
+    const source = progress.index.source === 'database' ? '数据库邮箱索引项' : '飞书Base记录';
     const indexCount = progress.index.total
       ? progress.index.loaded + ' / ' + progress.index.total
       : String(progress.index.loaded || 0);
@@ -362,7 +364,35 @@ export const ADMIN_JS = `(() => {
     creator_id_ambiguous: '达人ID重复，无法唯一匹配'
   };
 
-  function showMessages(_mailboxId, label, messages) {
+  const aiStatusLabels = {
+    pending: '等待AI分析', completed: 'AI分析完成',
+    failed: 'AI分析失败', skipped: '尚未分析'
+  };
+
+  const replyTypeLabels = {
+    interested_with_quote: '感兴趣并报价',
+    interested_without_quote: '感兴趣未报价',
+    counteroffer: '还价/议价', declined: '拒绝合作',
+    manager_reply: '经纪人回复', needs_clarification: '需要澄清',
+    unrelated: '非达人回复'
+  };
+
+  const actionLabels = {
+    review_quote: '审核报价', ask_for_quote: '询问报价',
+    answer_questions: '回答问题', clarify_requirements: '澄清合作要求',
+    close_as_declined: '记录拒绝', manual_review: '人工判断'
+  };
+
+  function analysisRow(parent, label, value, className) {
+    if (value === null || value === undefined || value === '' ||
+        (Array.isArray(value) && !value.length)) return;
+    const row = element('div', undefined, 'analysis-row' + (className ? ' ' + className : ''));
+    row.append(element('strong', label));
+    row.append(element('p', Array.isArray(value) ? value.join('；') : String(value)));
+    parent.append(row);
+  }
+
+  function showMessages(mailboxId, label, messages) {
     byId('message-title').textContent = label + ' · 最近邮件';
     const list = byId('message-list');
     list.replaceChildren();
@@ -373,9 +403,53 @@ export const ADMIN_JS = `(() => {
       card.append(element('span', classificationLabels[message.classification] || '未知', 'pill'));
       card.append(element('span', message.matchStatus === 'matched' ? '已匹配飞书' : message.matchStatus === 'unmatched' ? '未匹配飞书' : '等待匹配', 'pill'));
       if (message.matchReason) card.append(element('span', matchReasonLabels[message.matchReason] || message.matchReason, 'pill'));
-      card.append(element('p', '来自：' + (message.from.join(', ') || '未知')));
-      if (message.receivedAt) card.append(element('p', new Date(message.receivedAt).toLocaleString()));
-      if (message.textPreview) card.append(element('p', message.textPreview.slice(0, 500)));
+      const aiState = message.aiAnalysisStatus || 'skipped';
+      const aiClass = aiState === 'completed' ? 'success' : aiState === 'failed' ? 'failed' : 'pending';
+      card.append(element('span', aiStatusLabels[aiState] || aiState, 'pill ' + aiClass));
+
+      const columns = element('div', undefined, 'message-columns');
+      const original = element('section', undefined, 'message-column');
+      original.append(element('h4', '原邮件'));
+      original.append(element('p', '来自：' + (message.from.join(', ') || '未知')));
+      if (message.receivedAt) original.append(element('p', new Date(message.receivedAt).toLocaleString()));
+      if (message.textPreview) original.append(element('p', message.textPreview.slice(0, 3000), 'message-body'));
+
+      const ai = element('section', undefined, 'message-column ai');
+      ai.append(element('h4', 'AI分析（仅供人工确认）'));
+      const analysis = message.analysis;
+      if (analysis) {
+        analysisRow(ai, '中文摘要', analysis.summaryZh);
+        analysisRow(ai, '回复类型', replyTypeLabels[analysis.replyType] || analysis.replyType);
+        analysisRow(ai, '报价', analysis.quotedAmount === null ? '未识别到报价' : analysis.currency + ' ' + analysis.quotedAmount);
+        analysisRow(ai, '交付内容', analysis.deliverables);
+        analysisRow(ai, '时间/档期', analysis.timeline);
+        analysisRow(ai, '权益要求', analysis.rightsRequests);
+        analysisRow(ai, '付款要求', analysis.paymentRequests);
+        analysisRow(ai, '风险提示', analysis.riskFlags);
+        analysisRow(ai, '建议动作', actionLabels[analysis.recommendedAction] || analysis.recommendedAction);
+        analysisRow(ai, '英文回复草稿', analysis.replyDraftEn, 'draft');
+        analysisRow(ai, '飞书AI字段', message.aiBaseSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待写回/写回失败' : '未匹配达人，暂不写回');
+        if (message.aiAnalyzedAt) analysisRow(ai, '分析时间', new Date(message.aiAnalyzedAt).toLocaleString());
+      } else {
+        const reason = aiState === 'failed'
+          ? '上次分析失败：' + (message.aiErrorCode || '请稍后重试')
+          : message.classification === 'creator_reply'
+            ? '点击下方按钮生成中文摘要和英文回复草稿。'
+            : '仅达人回复会进入AI分析。';
+        ai.append(element('p', reason, 'muted'));
+      }
+      columns.append(original, ai);
+      card.append(columns);
+
+      if (message.classification === 'creator_reply') {
+        const actions = element('div', undefined, 'actions');
+        actions.append(button(analysis ? '重新分析' : 'AI分析', async () => {
+          await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/analyze', { method: 'POST' });
+          notify('AI分析已完成；如已匹配达人，系统也已尝试写回飞书');
+          await loadMessages(mailboxId, label);
+        }));
+        card.append(actions);
+      }
       list.append(card);
     });
     byId('message-panel').hidden = false;
