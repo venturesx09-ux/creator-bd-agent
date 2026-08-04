@@ -7,6 +7,12 @@ import { SecretBox } from "./secret-box.js";
 
 export interface EmailAnalysisProcessor {
   process(message: MessageSummary, force?: boolean): Promise<EmailAnalysis>;
+  translateDraft(message: MessageSummary, draftZh: string): Promise<EmailAnalysis>;
+  saveDrafts(
+    message: MessageSummary,
+    draftZh: string,
+    draftEn: string
+  ): Promise<EmailAnalysis>;
 }
 
 function analysisFields(analysis: EmailAnalysis): Record<string, unknown> {
@@ -18,6 +24,9 @@ function analysisFields(analysis: EmailAnalysis): Record<string, unknown> {
     fields["报价金额"] = analysis.quotedAmount;
   }
   if (analysis.currency) fields["报价币种"] = analysis.currency;
+  if (analysis.deliverables.length) {
+    fields["交付内容"] = analysis.deliverables.join("；");
+  }
   if (analysis.rightsRequests.length) {
     fields["权益要求"] = analysis.rightsRequests.join("；");
   }
@@ -58,6 +67,50 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
     return job;
   }
 
+  async translateDraft(
+    message: MessageSummary,
+    draftZh: string
+  ): Promise<EmailAnalysis> {
+    const normalizedZh = this.validDraft(draftZh);
+    let draftEn: string;
+    try {
+      draftEn = await this.client.translateDraft({
+        draftZh: normalizedZh,
+        ...(message.project ? { project: message.project } : {}),
+        originalEmail: message.textPreview
+      });
+    } catch (error) {
+      throw new Error(safeErrorCode(error));
+    }
+    return this.saveDrafts(message, normalizedZh, draftEn);
+  }
+
+  async saveDrafts(
+    message: MessageSummary,
+    draftZh: string,
+    draftEn: string
+  ): Promise<EmailAnalysis> {
+    if (!message.analysis) throw new Error("AI_ANALYSIS_REQUIRED");
+    const updated: EmailAnalysis = {
+      ...message.analysis,
+      replyDraftZh: this.validDraft(draftZh),
+      replyDraftEn: this.validDraft(draftEn)
+    };
+    await this.repository.saveMessageAnalysis(
+      message.id,
+      this.secretBox.encrypt(updated),
+      this.client.model
+    );
+    message.analysis = updated;
+    message.aiAnalysisStatus = "completed";
+    message.aiAnalyzedAt = new Date().toISOString();
+    message.aiModel = this.client.model;
+    message.aiBaseSyncStatus = "pending";
+    delete message.aiErrorCode;
+    await this.syncToFeishu(message, updated);
+    return updated;
+  }
+
   private async processOnce(
     message: MessageSummary,
     force: boolean
@@ -94,10 +147,23 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
       }
     }
 
-    if (
-      message.matchedRecordId &&
-      message.aiBaseSyncStatus !== "synced"
-    ) {
+    await this.syncToFeishu(message, analysis);
+    return analysis;
+  }
+
+  private validDraft(value: string): string {
+    const normalized = value.replace(/\u0000/gu, "").trim();
+    if (!normalized || normalized.length > 4_000) {
+      throw new Error("INVALID_DRAFT");
+    }
+    return normalized;
+  }
+
+  private async syncToFeishu(
+    message: MessageSummary,
+    analysis: EmailAnalysis
+  ): Promise<void> {
+    if (message.matchedRecordId && message.aiBaseSyncStatus !== "synced") {
       try {
         await this.feishuClient.updateBaseRecord(
           message.matchedRecordId,
@@ -113,6 +179,5 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
         }));
       }
     }
-    return analysis;
   }
 }

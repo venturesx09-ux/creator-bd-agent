@@ -158,9 +158,12 @@ describe("mailbox admin", () => {
         paymentRequests: [],
         riskFlags: [],
         recommendedAction: "review_quote",
+        replyDraftZh: "你好，感谢你分享报价，我们会进行内部确认。",
         replyDraftEn: "Hi, thank you for sharing your rate."
       }
     }),
+    updateMessageDrafts: async (mailboxId, messageId) =>
+      mailboxService.analyzeMessage(mailboxId, messageId),
     syncAllEnabled: async () => ({ attempted: 1, succeeded: 1, failed: 0 }),
     getDailySummary: async () => ({
       since: new Date(0).toISOString(), total: 1, matched: 1,
@@ -201,6 +204,18 @@ describe("mailbox admin", () => {
       .expect(200);
     assert.equal(response.body.message.analysis.quotedAmount, 500);
     assert.equal(response.body.message.aiBaseSyncStatus, "synced");
+  });
+
+  it("protects bilingual draft translation and saving", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    const url = `/api/admin/mailboxes/${mailbox.id}/messages/message_test/draft`;
+    await request(app).put(url).send({ draftZh: "你好", translate: true }).expect(401);
+    const response = await request(app)
+      .put(url)
+      .set("authorization", `Bearer ${ADMIN_TOKEN}`)
+      .send({ draftZh: "你好，感谢你的回复。", translate: true })
+      .expect(200);
+    assert.equal(response.body.message.analysis.replyDraftZh.includes("感谢"), true);
   });
 
   it("protects mailbox APIs and returns only safe mailbox metadata", async () => {

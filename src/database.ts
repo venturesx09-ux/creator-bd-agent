@@ -46,6 +46,7 @@ export type AiAnalysisStatus =
 export type AiBaseSyncStatus = "pending" | "synced";
 export type MatchReason =
   | "email_exact"
+  | "subject_creator_id"
   | "history_creator_id"
   | "history_creator_id_missing"
   | "creator_id_not_found"
@@ -740,12 +741,14 @@ export class PostgresMailboxRepository implements MailboxRepository {
               ai_base_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
-         AND (classification = 'unknown' OR match_status <> 'matched'
-              OR base_sync_status <> 'synced'
-              OR (classification = 'creator_reply' AND ai_analysis_status = 'pending')
-              OR (matched_record_id IS NOT NULL
-                  AND ai_analysis_status = 'completed'
-                  AND ai_base_sync_status <> 'synced'))
+         AND (classification = 'unknown'
+              OR (classification = 'creator_reply'
+                  AND (match_status <> 'matched'
+                       OR base_sync_status <> 'synced'
+                       OR ai_analysis_status = 'pending'
+                       OR (matched_record_id IS NOT NULL
+                           AND ai_analysis_status = 'completed'
+                           AND ai_base_sync_status <> 'synced'))))
        ORDER BY received_at DESC NULLS LAST, created_at DESC
        LIMIT $2`,
       [mailboxId, limit]
@@ -866,13 +869,16 @@ export class PostgresMailboxRepository implements MailboxRepository {
       const count = Number.parseInt(row.count, 10);
       summary.total += count;
       summary.classifications[row.classification] += count;
-      summary[row.match_status] += count;
+      if (row.classification === "creator_reply") {
+        summary[row.match_status] += count;
+      }
     }
     const distinct = await this.pool.query<{ count: string }>(
       `SELECT COUNT(DISTINCT matched_record_id) AS count
        FROM email_messages
        WHERE COALESCE(received_at, created_at) >= $1
          AND match_status = 'matched'
+         AND classification = 'creator_reply'
          AND matched_record_id IS NOT NULL`,
       [since]
     );

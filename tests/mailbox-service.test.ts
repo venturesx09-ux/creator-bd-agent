@@ -178,7 +178,14 @@ describe("email rematching", () => {
     const result = messagesNeedingMatch([
       { ...base, id: "pending", matchStatus: "pending" },
       { ...base, id: "unmatched", matchStatus: "unmatched" },
-      { ...base, id: "matched", matchStatus: "matched" }
+      { ...base, id: "matched", matchStatus: "matched" },
+      {
+        ...base,
+        id: "automatic-with-creator-id",
+        subject: "Automatic reply: partnership with @creator_handle",
+        classification: "automatic_reply",
+        matchStatus: "pending"
+      }
     ]);
     assert.deepEqual(result.map((message) => message.id), ["pending", "unmatched"]);
   });

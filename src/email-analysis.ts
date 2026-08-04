@@ -34,8 +34,20 @@ export const EmailAnalysisSchema = z.object({
   paymentRequests: z.array(z.string().max(500)).max(20),
   riskFlags: z.array(z.string().max(500)).max(20),
   recommendedAction: RecommendedActionSchema,
+  replyDraftZh: z.string().max(4_000),
   replyDraftEn: z.string().max(4_000)
 });
+
+const LegacyEmailAnalysisSchema = EmailAnalysisSchema.omit({
+  replyDraftZh: true
+});
+
+export function parseStoredEmailAnalysis(value: unknown): EmailAnalysis | undefined {
+  const current = EmailAnalysisSchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = LegacyEmailAnalysisSchema.safeParse(value);
+  return legacy.success ? { ...legacy.data, replyDraftZh: "" } : undefined;
+}
 
 export type EmailAnalysis = z.infer<typeof EmailAnalysisSchema>;
 
@@ -50,8 +62,17 @@ export type EmailAnalysisInput = {
 
 export interface EmailAnalysisClient {
   analyze(input: EmailAnalysisInput): Promise<EmailAnalysis>;
+  translateDraft(input: {
+    draftZh: string;
+    project?: string;
+    originalEmail?: string;
+  }): Promise<string>;
   readonly model: string;
 }
+
+const DraftTranslationSchema = z.object({
+  replyDraftEn: z.string().min(1).max(4_000)
+});
 
 const ANALYSIS_INSTRUCTIONS = `You analyze inbound creator partnership emails for an agency BD team.
 
@@ -62,7 +83,7 @@ Tasks:
 - quotedAmount is the total collaboration quote when one is explicit. Otherwise return null.
 - currency must be an uppercase ISO 4217 code when explicit or unambiguous; otherwise null.
 - Flag requests involving prepayment, perpetual or broad content rights, whitelisting, exclusivity, AI training, sublicensing, contract changes, or uncertain legal/payment terms.
-- A reply draft must be in professional English. It may acknowledge receipt, ask for missing information, or say the team will confirm internally. It must never accept a quote, change a budget, promise payment, agree to rights, or bind the agency without human approval.
+- Produce aligned Chinese and English reply drafts in replyDraftZh and replyDraftEn. They may acknowledge receipt, ask for missing information, or say the team will confirm internally. They must never accept a quote, change a budget, promise payment, agree to rights, or bind the agency without human approval.
 - If the email is unrelated, still return the required structure with empty arrays and a short explanation.
 
 Reply type guidance:
@@ -126,5 +147,38 @@ export class OpenAIEmailAnalysisClient implements EmailAnalysisClient {
       throw new Error("OpenAI response did not contain structured analysis");
     }
     return response.output_parsed;
+  }
+
+  async translateDraft(input: {
+    draftZh: string;
+    project?: string;
+    originalEmail?: string;
+  }): Promise<string> {
+    const response = await this.client.responses.parse({
+      model: this.model,
+      store: false,
+      max_output_tokens: 1_200,
+      input: [
+        {
+          role: "developer",
+          content: "Translate the user's Chinese creator-BD email draft into polished, natural business English. Preserve every fact, number, deadline, price, right, payment term, name, link and emoji exactly. Do not add promises, terms or commitments. Return only the structured translation."
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            project: input.project ?? "",
+            originalEmailContext: safeEmailText(input.originalEmail ?? "").slice(0, 4_000),
+            draftZh: input.draftZh.replace(/\u0000/gu, "").trim().slice(0, 4_000)
+          })
+        }
+      ],
+      text: {
+        format: zodTextFormat(DraftTranslationSchema, "creator_draft_translation")
+      }
+    });
+    if (!response.output_parsed) {
+      throw new Error("OpenAI response did not contain a draft translation");
+    }
+    return response.output_parsed.replyDraftEn;
   }
 }

@@ -106,6 +106,8 @@ export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple
 
 export const ADMIN_CSS_EXTRA = `main{width:min(1180px,calc(100% - 32px))}.messages{gap:14px}.message{border:1px solid #e8e8e3;border-radius:14px;padding:17px;background:#fff}.message:first-child{border-top:1px solid #e8e8e3}.message h3{font-size:16px}.message h4{font-size:13px;margin:0 0 10px}.message-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}.message-column{background:#f7f7f4;border-radius:12px;padding:14px;min-width:0}.message-column.ai{background:#f3f7ff;border:1px solid #dae5fb}.message-body{max-height:300px;overflow:auto}.analysis-row{border-top:1px solid rgba(0,0,0,.08);padding-top:8px;margin-top:8px}.analysis-row strong{display:block;font-size:11px;color:#6b6b6b;margin-bottom:3px}.draft{background:#fff;border-radius:9px;padding:10px;border:1px solid #dce5f5;max-height:320px;overflow:auto}.pill.success{background:#eaf7ee;color:#147a39}.pill.failed{background:#fff0ef;color:#a32119}.pill.pending{background:#fff7df;color:#835f00}@media(max-width:760px){.message-columns{grid-template-columns:1fr}}`;
 
+export const ADMIN_CSS_DRAFT = `.draft-editor{border-top:1px solid rgba(0,0,0,.08);margin-top:10px;padding-top:10px}.draft-editor label{margin-top:9px}.draft-editor textarea{width:100%;min-height:140px;resize:vertical;border:1px solid #cfd9ed;border-radius:9px;padding:10px;background:#fff;font:inherit;font-size:13px;line-height:1.55}.draft-editor textarea:focus{outline:2px solid #365fba;outline-offset:1px}.draft-editor .actions{margin-top:10px}`;
+
 export const ADMIN_JS = `(() => {
   const tokenStorageKey = 'creator-bd-agent-admin-token';
   let adminToken = window.sessionStorage.getItem(tokenStorageKey) || '';
@@ -360,9 +362,10 @@ export const ADMIN_JS = `(() => {
 
   const matchReasonLabels = {
     email_exact: '通过发件邮箱匹配',
+    subject_creator_id: '通过邮件标题 @达人ID 匹配',
     history_creator_id: '通过历史达人ID匹配',
-    history_creator_id_missing: '历史邮件中未找到Hi + 达人ID',
-    creator_id_not_found: '历史达人ID在飞书中不存在',
+    history_creator_id_missing: '标题和历史邮件中未找到达人ID',
+    creator_id_not_found: '标题或历史达人ID在飞书中不存在',
     creator_id_ambiguous: '达人ID重复，无法唯一匹配'
   };
 
@@ -394,6 +397,14 @@ export const ADMIN_JS = `(() => {
     parent.append(row);
   }
 
+  function draftTextarea(value, language) {
+    const node = element('textarea', undefined, 'draft-textarea ' + language);
+    node.value = value || '';
+    node.maxLength = 4000;
+    node.spellcheck = true;
+    return node;
+  }
+
   function showMessages(mailboxId, label, messages) {
     byId('message-title').textContent = label + ' · 最近邮件';
     const list = byId('message-list');
@@ -403,8 +414,9 @@ export const ADMIN_JS = `(() => {
       const card = element('article', undefined, 'message');
       card.append(element('h3', message.subject || '(无主题)'));
       card.append(element('span', classificationLabels[message.classification] || '未知', 'pill'));
-      card.append(element('span', message.matchStatus === 'matched' ? '已匹配飞书' : message.matchStatus === 'unmatched' ? '未匹配飞书' : '等待匹配', 'pill'));
-      if (message.matchReason) card.append(element('span', matchReasonLabels[message.matchReason] || message.matchReason, 'pill'));
+      const needsCreatorMatch = message.classification === 'creator_reply';
+      card.append(element('span', needsCreatorMatch ? (message.matchStatus === 'matched' ? '已匹配飞书' : message.matchStatus === 'unmatched' ? '未匹配飞书' : '等待匹配') : '无需匹配', 'pill'));
+      if (needsCreatorMatch && message.matchReason) card.append(element('span', matchReasonLabels[message.matchReason] || message.matchReason, 'pill'));
       const aiState = message.aiAnalysisStatus || 'skipped';
       const aiClass = aiState === 'completed' ? 'success' : aiState === 'failed' ? 'failed' : 'pending';
       card.append(element('span', aiStatusLabels[aiState] || aiState, 'pill ' + aiClass));
@@ -439,7 +451,35 @@ export const ADMIN_JS = `(() => {
         analysisRow(ai, '付款要求', analysis.paymentRequests);
         analysisRow(ai, '风险提示', analysis.riskFlags);
         analysisRow(ai, '建议动作', actionLabels[analysis.recommendedAction] || analysis.recommendedAction);
-        analysisRow(ai, '英文回复草稿', analysis.replyDraftEn, 'draft');
+        const draftEditor = element('div', undefined, 'draft-editor');
+        const draftZh = draftTextarea(analysis.replyDraftZh, 'zh');
+        const draftEn = draftTextarea(analysis.replyDraftEn, 'en');
+        const zhLabel = element('label', '中文回复草稿（可编辑）');
+        const enLabel = element('label', 'English Reply Draft（可编辑）');
+        zhLabel.append(draftZh);
+        enLabel.append(draftEn);
+        const draftActions = element('div', undefined, 'actions');
+        draftActions.append(
+          button('根据中文生成英文并保存', async () => {
+            notify('正在翻译并保存，请等待…');
+            await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/draft', {
+              method: 'PUT',
+              body: JSON.stringify({ draftZh: draftZh.value, translate: true })
+            });
+            notify('中英文草稿已保存，英文已尝试写回飞书');
+            await loadMessages(mailboxId, label);
+          }),
+          button('保存当前中英文', async () => {
+            await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/draft', {
+              method: 'PUT',
+              body: JSON.stringify({ draftZh: draftZh.value, draftEn: draftEn.value, translate: false })
+            });
+            notify('当前中英文草稿已保存，英文已尝试写回飞书');
+            await loadMessages(mailboxId, label);
+          })
+        );
+        draftEditor.append(zhLabel, enLabel, draftActions);
+        ai.append(draftEditor);
         analysisRow(ai, '飞书AI字段', message.aiBaseSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待写回/写回失败' : '未匹配达人，暂不写回');
         if (message.aiAnalyzedAt) analysisRow(ai, '分析时间', new Date(message.aiAnalyzedAt).toLocaleString());
       } else {

@@ -5,6 +5,7 @@ import {
   baseFieldsForMessage,
   buildCreatorEmailIndex,
   extractHistoricalCreatorIds,
+  extractSubjectCreatorIds,
   FeishuCreatorMatcher
 } from "../src/feishu-creator-matcher.js";
 import type { FeishuClient } from "../src/feishu-client.js";
@@ -78,6 +79,84 @@ describe("Feishu creator matching", () => {
       ),
       ["shark", "creator_handle"]
     );
+  });
+
+  it("extracts @creator IDs from the subject without treating email domains as IDs", () => {
+    assert.deepEqual(
+      extractSubjectCreatorIds(
+        "Re: Paid partnership with @Creator.Handle — creator@example.com"
+      ),
+      ["creator.handle"]
+    );
+  });
+
+  it("falls back to the subject @creator ID before historical content", async () => {
+    const updates: Array<{ status: MatchStatus; recordId?: string; reason?: string }> = [];
+    const baseUpdates: Array<Record<string, unknown>> = [];
+    const repository = {
+      loadFeishuEmailIndex: async () => ({ entries: [] }),
+      replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [],
+      replaceFeishuCreatorIdIndex: async () => undefined,
+      updateFeishuIndexRecord: async () => undefined,
+      updateMessageMatch: async (
+        _id: string,
+        status: MatchStatus,
+        recordId?: string,
+        reason?: string
+      ) => updates.push({ status, ...(recordId ? { recordId } : {}), ...(reason ? { reason } : {}) }),
+      getUnmatchedRecordId: async () => undefined,
+      setUnmatchedRecordId: async () => undefined
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      listAllBaseRecords: async () => [{
+        record_id: "rec_subject",
+        fields: { "达人ID": "creator_handle", "达人邮箱": "old@example.com" }
+      }],
+      updateBaseRecord: async (_recordId: string, fields: Record<string, unknown>) => {
+        baseUpdates.push(fields);
+      },
+      isUnmatchedTableConfigured: () => false
+    } as unknown as FeishuClient;
+
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
+      id: "subject-message", uid: 9,
+      subject: "Re: Paid Creator Partnership with @creator_handle",
+      from: [], fromAddresses: ["new-manager@agency.com"], to: [],
+      messageId: "m9", references: [], textPreview: "Thanks for reaching out.",
+      classification: "creator_reply", matchStatus: "pending",
+      receivedAt: "2026-08-04T12:00:00.000Z"
+    }]);
+
+    assert.deepEqual(updates, [{
+      status: "matched", recordId: "rec_subject", reason: "subject_creator_id"
+    }]);
+    assert.equal(baseUpdates[0]?.["最近发件邮箱"], "new-manager@agency.com");
+  });
+
+  it("does not match automatic replies even when the subject contains @creator ID", async () => {
+    const updates: unknown[] = [];
+    const baseUpdates: unknown[] = [];
+    const repository = {
+      updateMessageMatch: async (...args: unknown[]) => { updates.push(args); }
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      updateBaseRecord: async (...args: unknown[]) => { baseUpdates.push(args); }
+    } as unknown as FeishuClient;
+
+    const message: MessageSummary = {
+      id: "automatic-message", uid: 10,
+      subject: "Automatic reply: Paid Partnership with @creator_handle",
+      from: [], fromAddresses: ["auto@example.com"], to: [],
+      messageId: "m10", references: [], textPreview: "Out of office",
+      classification: "automatic_reply", matchStatus: "pending"
+    };
+
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([message]);
+
+    assert.deepEqual(updates, []);
+    assert.deepEqual(baseUpdates, []);
+    assert.equal(message.matchStatus, "pending");
   });
 
   it("falls back to a unique historical creator ID and records the new sender", async () => {
@@ -158,7 +237,7 @@ describe("Feishu creator matching", () => {
     assert.equal(storedQueueId, "rec_queue");
     assert.equal(createdFields?.["待匹配邮件ID"], "unmatched-message");
     assert.equal(createdFields?.["处理状态"], "待处理");
-    assert.equal(createdFields?.["未匹配原因"], "历史邮件中未找到达人ID");
+    assert.equal(createdFields?.["未匹配原因"], "标题和历史邮件中未找到达人ID");
     assert.equal(createdFields?.["收件邮箱"], "bd@example.com");
     assert.equal(createdFields?.["项目"], "Tripo");
   });

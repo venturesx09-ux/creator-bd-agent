@@ -42,6 +42,17 @@ export function extractHistoricalCreatorIds(text: string): string[] {
   return [...output];
 }
 
+export function extractSubjectCreatorIds(subject: string): string[] {
+  const output = new Set<string>();
+  const pattern = /(?:^|[\s([{"'“‘《<:：,，])@([\p{L}\p{N}._-]{1,100})/gu;
+  for (const match of subject.matchAll(pattern)) {
+    const candidate = (match[1] ?? "").replace(/[.，,!！?？:：;；)\]}>”’]+$/u, "");
+    const normalized = normalizeCreatorId(candidate);
+    if (normalized) output.add(normalized);
+  }
+  return [...output];
+}
+
 function textValues(value: unknown, depth = 0): string[] {
   if (depth > 5 || value === null || value === undefined) return [];
   if (typeof value === "string" || typeof value === "number") {
@@ -181,9 +192,10 @@ function classificationLabel(value: MessageSummary["classification"]): string {
 function unmatchedReasonLabel(value: MatchReason): string {
   return {
     email_exact: "需要人工判断",
+    subject_creator_id: "需要人工判断",
     history_creator_id: "需要人工判断",
-    history_creator_id_missing: "历史邮件中未找到达人ID",
-    creator_id_not_found: "达人ID在飞书中不存在",
+    history_creator_id_missing: "标题和历史邮件中未找到达人ID",
+    creator_id_not_found: "标题或历史达人ID在飞书中不存在",
     creator_id_ambiguous: "达人ID重复"
   }[value];
 }
@@ -202,7 +214,10 @@ function unmatchedFieldsForMessage(
     "邮件主题": message.subject.slice(0, 500),
     "邮件分类": classificationLabel(message.classification),
     "未匹配原因": unmatchedReasonLabel(reason),
-    "历史识别达人ID": extractHistoricalCreatorIds(message.textPreview).join(", "),
+    "历史识别达人ID": [...new Set([
+      ...extractSubjectCreatorIds(message.subject),
+      ...extractHistoricalCreatorIds(message.textPreview)
+    ])].join(", "),
     "邮件预览": message.textPreview.slice(0, 2_000),
     "处理状态": "待处理"
   };
@@ -269,9 +284,50 @@ function resolveMessageRecord(
     .find(Boolean);
   if (emailRecord) return { record: emailRecord, reason: "email_exact" };
 
-  const creatorIds = extractHistoricalCreatorIds(message.textPreview);
-  if (!creatorIds.length) return { reason: "history_creator_id_missing" };
+  const subjectCreatorIds = extractSubjectCreatorIds(message.subject);
+  const subjectResolution = resolveCreatorIds(subjectCreatorIds, indexes);
+  if (subjectResolution.record) {
+    return {
+      record: subjectResolution.record,
+      reason: "subject_creator_id",
+      ...(subjectResolution.creatorId
+        ? { creatorId: subjectResolution.creatorId }
+        : {})
+    };
+  }
+  if (subjectResolution.ambiguous) {
+    return { reason: "creator_id_ambiguous" };
+  }
 
+  const creatorIds = extractHistoricalCreatorIds(message.textPreview);
+  if (!creatorIds.length) {
+    return {
+      reason: subjectCreatorIds.length
+        ? "creator_id_not_found"
+        : "history_creator_id_missing"
+    };
+  }
+
+  const historyResolution = resolveCreatorIds(creatorIds, indexes);
+  if (historyResolution.record) {
+    return {
+      record: historyResolution.record,
+      reason: "history_creator_id",
+      ...(historyResolution.creatorId
+        ? { creatorId: historyResolution.creatorId }
+        : {})
+    };
+  }
+  if (historyResolution.ambiguous) {
+    return { reason: "creator_id_ambiguous" };
+  }
+  return { reason: "creator_id_not_found" };
+}
+
+function resolveCreatorIds(
+  creatorIds: string[],
+  indexes: CreatorIndexes
+): { record?: FeishuBaseRecord; creatorId?: string; ambiguous: boolean } {
   let ambiguous = false;
   const matches = new Map<string, FeishuBaseRecord>();
   for (const creatorId of creatorIds) {
@@ -289,14 +345,11 @@ function resolveMessageRecord(
     );
     return {
       record,
-      reason: "history_creator_id",
-      ...(creatorId ? { creatorId } : {})
+      ...(creatorId ? { creatorId } : {}),
+      ambiguous: false
     };
   }
-  if (matches.size > 1 || ambiguous) {
-    return { reason: "creator_id_ambiguous" };
-  }
-  return { reason: "creator_id_not_found" };
+  return { ambiguous: matches.size > 1 || ambiguous };
 }
 
 export class FeishuCreatorMatcher implements CreatorMatcher {
@@ -312,7 +365,14 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
   ) {}
 
   async matchMessages(messages: MessageSummary[]): Promise<void> {
-    this.progress.beginBatch(messages.length);
+    const candidateMessages = messages.filter(
+      (message) => message.classification === "creator_reply"
+    );
+    this.progress.beginBatch(candidateMessages.length);
+    if (!candidateMessages.length) {
+      this.progress.endBatch();
+      return;
+    }
     let indexes: CreatorIndexes;
     try {
       indexes = await this.getIndexes();
@@ -321,7 +381,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       this.progress.failBatch("飞书索引加载失败");
       throw error;
     }
-    const orderedMessages = [...messages].sort((left, right) =>
+    const orderedMessages = [...candidateMessages].sort((left, right) =>
       Date.parse(left.receivedAt ?? "") - Date.parse(right.receivedAt ?? "")
     );
     for (const message of orderedMessages) {

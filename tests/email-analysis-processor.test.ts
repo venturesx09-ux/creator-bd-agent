@@ -23,6 +23,7 @@ const analysis: EmailAnalysis = {
   paymentRequests: ["asks about payment timing"],
   riskFlags: [],
   recommendedAction: "review_quote",
+  replyDraftZh: "你好，感谢你分享报价，我们会进行内部确认。",
   replyDraftEn: "Hi, thank you for sharing your rate. We will review it internally."
 };
 
@@ -53,7 +54,8 @@ describe("AI email analysis", () => {
     } as unknown as MailboxRepository;
     const client: EmailAnalysisClient = {
       model: "gpt-5.6-luna",
-      analyze: async () => analysis
+      analyze: async () => analysis,
+      translateDraft: async () => "Hi, thanks for your reply."
     };
     const feishuClient = {
       updateBaseRecord: async (
@@ -97,8 +99,43 @@ describe("AI email analysis", () => {
     assert.equal(writtenFields["AI回复草稿"], analysis.replyDraftEn);
     assert.equal(writtenFields["报价金额"], 500);
     assert.equal(writtenFields["报价币种"], "USD");
+    assert.equal(writtenFields["交付内容"], "1 Instagram Reel");
     assert.equal("合作阶段" in writtenFields, false);
     assert.equal(synced, true);
     assert.equal(message.aiBaseSyncStatus, "synced");
+  });
+
+  it("translates an edited Chinese draft and persists the bilingual pair", async () => {
+    const secretBox = new SecretBox(Buffer.alloc(32, 5).toString("base64"));
+    let encrypted = "";
+    const repository = {
+      saveMessageAnalysis: async (
+        _messageId: string,
+        encryptedAnalysis: string
+      ) => { encrypted = encryptedAnalysis; },
+      markMessageAnalysisSynced: async () => undefined
+    } as unknown as MailboxRepository;
+    const client: EmailAnalysisClient = {
+      model: "gpt-5.6-luna",
+      analyze: async () => analysis,
+      translateDraft: async () => "Hi, thank you. We will confirm internally."
+    };
+    const feishuClient = {
+      updateBaseRecord: async () => undefined
+    } as unknown as FeishuClient;
+    const message: MessageSummary = {
+      id: "message-2", uid: 2, subject: "Re", from: [], fromAddresses: [],
+      to: [], messageId: "m2", references: [], textPreview: "Thanks",
+      classification: "creator_reply", matchStatus: "matched",
+      matchedRecordId: "rec2", aiAnalysisStatus: "completed",
+      aiBaseSyncStatus: "synced", analysis
+    };
+    const processor = new DefaultEmailAnalysisProcessor(
+      client, repository, secretBox, feishuClient
+    );
+    await processor.translateDraft(message, "你好，感谢回复，我们会内部确认。");
+    const stored = secretBox.decrypt<EmailAnalysis>(encrypted);
+    assert.equal(stored.replyDraftZh, "你好，感谢回复，我们会内部确认。");
+    assert.equal(stored.replyDraftEn, "Hi, thank you. We will confirm internally.");
   });
 });

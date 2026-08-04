@@ -11,7 +11,10 @@ import type {
   StoredMailbox,
   StoredMessageInput
 } from "./database.js";
-import { EmailAnalysisSchema, type EmailAnalysis } from "./email-analysis.js";
+import {
+  parseStoredEmailAnalysis,
+  type EmailAnalysis
+} from "./email-analysis.js";
 import type { EmailAnalysisProcessor } from "./email-analysis-processor.js";
 import { SecretBox } from "./secret-box.js";
 
@@ -120,6 +123,11 @@ export interface MailboxServiceLike {
   }>;
   listMessages(id: string, limit: number): Promise<MessageSummary[]>;
   analyzeMessage(id: string, messageId: string): Promise<MessageSummary>;
+  updateMessageDrafts(
+    id: string,
+    messageId: string,
+    input: { draftZh: string; draftEn?: string; translate: boolean }
+  ): Promise<MessageSummary>;
   syncAllEnabled(): Promise<{
     attempted: number;
     succeeded: number;
@@ -319,7 +327,10 @@ export function classifyEmail(input: {
 export function messagesNeedingMatch(
   messages: MessageSummary[]
 ): MessageSummary[] {
-  return messages.filter((message) => message.matchStatus !== "matched");
+  return messages.filter((message) =>
+    message.classification === "creator_reply" &&
+    message.matchStatus !== "matched"
+  );
 }
 
 function normalizedReferences(value: string | string[] | undefined): string[] {
@@ -688,6 +699,68 @@ export class MailboxService implements MailboxServiceLike {
     }
   }
 
+  async updateMessageDrafts(
+    id: string,
+    messageId: string,
+    input: { draftZh: string; draftEn?: string; translate: boolean }
+  ): Promise<MessageSummary> {
+    const mailbox = await this.requireMailbox(id);
+    const row = await this.repository.getMessage(id, messageId);
+    if (!row) {
+      throw new MailboxServiceError("Message not found", 404, "MESSAGE_NOT_FOUND");
+    }
+    if (!this.analysisProcessor) {
+      throw new MailboxServiceError(
+        "AI analysis service is unavailable",
+        503,
+        "AI_ANALYSIS_UNAVAILABLE"
+      );
+    }
+    const connection = this.connectionConfig(mailbox);
+    const message: MessageSummary = {
+      ...this.messageFromStored(row),
+      mailboxLabel: mailbox.label,
+      mailboxEmail: connection.emailAddress,
+      project: mailbox.brand
+    };
+    if (!message.analysis) {
+      throw new MailboxServiceError(
+        "Analyze this message before editing its reply draft",
+        409,
+        "AI_ANALYSIS_REQUIRED"
+      );
+    }
+    try {
+      if (input.translate) {
+        await this.analysisProcessor.translateDraft(message, input.draftZh);
+      } else {
+        if (!input.draftEn) {
+          throw new MailboxServiceError(
+            "English draft is required",
+            400,
+            "INVALID_DRAFT"
+          );
+        }
+        await this.analysisProcessor.saveDrafts(
+          message,
+          input.draftZh,
+          input.draftEn
+        );
+      }
+      return message;
+    } catch (error) {
+      if (error instanceof MailboxServiceError) throw error;
+      const code = error instanceof Error ? error.message : "OPENAI_ANALYSIS_FAILED";
+      throw new MailboxServiceError(
+        code === "INVALID_DRAFT"
+          ? "Draft must contain between 1 and 4000 characters"
+          : "Draft update failed. Please try again later.",
+        code === "INVALID_DRAFT" ? 400 : 502,
+        code
+      );
+    }
+  }
+
   private messageFromStored(row: import("./database.js").StoredMessage): MessageSummary {
     const payload = this.secretBox.decrypt<LegacyEncryptedMessagePayload>(
       row.encryptedPayload
@@ -699,10 +772,9 @@ export class MailboxService implements MailboxServiceLike {
     let analysis: EmailAnalysis | undefined;
     if (row.encryptedAiAnalysis) {
       try {
-        const parsed = EmailAnalysisSchema.safeParse(
+        analysis = parseStoredEmailAnalysis(
           this.secretBox.decrypt<unknown>(row.encryptedAiAnalysis)
         );
-        if (parsed.success) analysis = parsed.data;
       } catch {
         analysis = undefined;
       }
