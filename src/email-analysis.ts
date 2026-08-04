@@ -93,6 +93,7 @@ export class OpenAIEmailAnalysisClient implements EmailAnalysisClient {
     this.model = config.model;
     this.client = new OpenAI({
       apiKey: config.apiKey,
+      baseURL: config.baseUrl,
       maxRetries: 2,
       timeout: 45_000
     });

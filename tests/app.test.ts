@@ -23,7 +23,8 @@ const config: AppConfig = {
   mailboxSyncIntervalMinutes: 10,
   openai: {
     apiKey: "test-openai-key",
-    model: "gpt-5.6-luna"
+    model: "gpt-5.6-luna",
+    baseUrl: "https://aihubmix.com/v1"
   },
   feishu: {
     appId: "test-app-id",

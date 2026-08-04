@@ -1,8 +1,8 @@
-# Creator BD Agent — Phase 4.0.1
+# Creator BD Agent — Phase 4.0.2
 
 这是Creator BD Agent第四阶段的“AI邮件分析工作台”。它保留第三阶段的邮箱只读同步与飞书匹配，并新增：
 
-- 使用OpenAI Responses API和结构化输出分析达人回复；
+- 使用OpenAI兼容的Responses API和结构化输出分析达人回复；
 - 自动生成中文摘要，提取报价、币种、交付内容、档期、权益、付款要求和风险；
 - 自动生成需要人工确认的英文回复草稿，不自动发送；
 - AI分析结果使用AES-256-GCM加密后保存到PostgreSQL；
@@ -97,7 +97,8 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `MAILBOX_ENCRYPTION_KEY` | 是 | 独立的32字节Base64密钥；Blueprint自动生成 |
 | `MAILBOX_INITIAL_SYNC_LIMIT` | 否 | 首次同步最近多少封，默认20，最大100 |
 | `MAILBOX_SYNC_INTERVAL_MINUTES` | 否 | 自动只读同步间隔，默认2，可设置1至60 |
-| `OPENAI_API_KEY` | 是 | OpenAI API Key，只保存于Render Environment |
+| `OPENAI_API_KEY` | 是 | OpenAI或AIHubMix API Key，只保存于Render Environment |
+| `OPENAI_BASE_URL` | 否 | AI兼容接口地址；AIHubMix填写`https://aihubmix.com/v1` |
 | `OPENAI_MODEL` | 否 | 分析模型，默认`gpt-5.6-luna` |
 | `PORT` | 否 | 默认3000；Render会自动提供 |
 
@@ -345,7 +346,7 @@ curl -X PATCH "https://你的Render域名/api/test/feishu/base/records/你的rec
 - [ ] 一个试点邮箱通过IMAP连接测试；
 - [ ] 能以只读模式同步最近邮件且不会修改已读状态；
 - [ ] 重复同步不会重复保存同一封邮件；
-- [ ] `/health`显示版本`4.0.1`且`openaiConfigured: true`；
+- [ ] `/health`显示版本`4.0.2`且`openaiConfigured: true`；
 - [ ] 管理页顶部显示过去24小时摘要；
 - [ ] 打开最近邮件后可看到原邮件与AI分析双栏；
 - [ ] 一封达人回复能生成中文摘要、报价提取和英文草稿；

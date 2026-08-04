@@ -12,6 +12,7 @@ export type AppConfig = {
   openai: {
     apiKey: string;
     model: string;
+    baseUrl: string;
   };
   feishu: {
     appId: string;
@@ -115,7 +116,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     openai: {
       apiKey: required(env, "OPENAI_API_KEY"),
-      model: optional(env, "OPENAI_MODEL") ?? "gpt-5.6-luna"
+      model: optional(env, "OPENAI_MODEL") ?? "gpt-5.6-luna",
+      baseUrl: optional(env, "OPENAI_BASE_URL") ?? "https://api.openai.com/v1"
     },
     feishu: {
       appId: required(env, "FEISHU_APP_ID"),
@@ -150,6 +152,8 @@ export function configurationStatus(config: AppConfig): {
       config.database.url && config.mailboxEncryptionKey
     ),
     unmatchedTableConfigured: Boolean(config.feishu.unmatchedTableId),
-    openaiConfigured: Boolean(config.openai.apiKey && config.openai.model)
+    openaiConfigured: Boolean(
+      config.openai.apiKey && config.openai.model && config.openai.baseUrl
+    )
   };
 }

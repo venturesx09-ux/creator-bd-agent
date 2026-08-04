@@ -37,6 +37,8 @@ services:
         value: "2"
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENAI_BASE_URL
+        value: https://aihubmix.com/v1
       - key: OPENAI_MODEL
         value: gpt-5.6-luna
 
