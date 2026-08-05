@@ -12,7 +12,7 @@ export const ADMIN_HTML = `<!doctype html>
       <div>
         <p class="eyebrow">CREATOR BD AGENT</p>
         <h1>Creator BD工作台</h1>
-        <p class="muted">自动只读同步、匹配飞书并生成AI草稿；邮件只会在你点击“确认并发送”后通过试点SMTP邮箱发出。</p>
+        <p class="muted">自动只读同步邮箱、匹配飞书，并生成中文摘要；报价继续在后台提取并写回飞书。当前不生成回复草稿，也不提供邮件发送入口。</p>
       </div>
       <span class="badge">AI ASSISTED</span>
     </header>
@@ -110,7 +110,7 @@ export const ADMIN_HTML = `<!doctype html>
 
       <section class="panel" id="message-panel" hidden>
         <div class="section-heading">
-          <div><h2 id="message-title">最近邮件</h2><p class="muted">左侧查看原邮件，右侧编辑草稿；只有点击“确认并发送”才会发信，发送不可撤回。</p></div>
+          <div><h2 id="message-title">最近邮件</h2><p class="muted">左侧查看原邮件，右侧只显示中文摘要。</p></div>
           <div class="heading-actions"><button id="refresh-messages" class="secondary" type="button">刷新邮件</button><button id="close-messages" class="secondary" type="button">关闭</button></div>
         </div>
         <div id="message-list" class="messages"></div>
@@ -437,11 +437,6 @@ export const ADMIN_JS = `(() => {
     failed: 'AI分析失败', skipped: '尚未分析'
   };
 
-  const sendStatusLabels = {
-    not_ready: '尚未准备发送', awaiting_confirmation: '等待人工确认',
-    sending: '发送处理中', sent: '已发送', failed: '上次发送失败'
-  };
-
   const replyTypeLabels = {
     interested_with_quote: '感兴趣并报价',
     interested_without_quote: '感兴趣未报价',
@@ -465,16 +460,7 @@ export const ADMIN_JS = `(() => {
     parent.append(row);
   }
 
-  function draftTextarea(value, language) {
-    const node = element('textarea', undefined, 'draft-textarea ' + language);
-    node.value = value || '';
-    node.maxLength = 4000;
-    node.spellcheck = true;
-    return node;
-  }
-
   function showMessages(mailboxId, label, messages) {
-    const activeMailbox = currentMailboxes.find((mailbox) => mailbox.id === mailboxId);
     byId('message-title').textContent = label + ' · 最近邮件';
     const list = byId('message-list');
     list.replaceChildren();
@@ -489,12 +475,6 @@ export const ADMIN_JS = `(() => {
       const aiState = message.aiAnalysisStatus || 'skipped';
       const aiClass = aiState === 'completed' ? 'success' : aiState === 'failed' ? 'failed' : 'pending';
       card.append(element('span', aiStatusLabels[aiState] || aiState, 'pill ' + aiClass));
-      if (message.classification === 'creator_reply') {
-        const sendState = message.sendStatus || (message.analysis ? 'awaiting_confirmation' : 'not_ready');
-        const sendClass = sendState === 'sent' ? 'success' : sendState === 'failed' ? 'failed' : 'pending';
-        card.append(element('span', sendStatusLabels[sendState] || sendState, 'pill ' + sendClass));
-      }
-
       const columns = element('div', undefined, 'message-columns');
       const original = element('section', undefined, 'message-column');
       original.append(element('h4', '原邮件'));
@@ -517,100 +497,13 @@ export const ADMIN_JS = `(() => {
       }
       if (analysis) {
         analysisRow(ai, '中文摘要', analysis.summaryZh);
-        analysisRow(ai, '回复类型', replyTypeLabels[analysis.replyType] || analysis.replyType);
-        analysisRow(ai, '报价', analysis.quotedAmount === null ? '未识别到报价' : analysis.currency + ' ' + analysis.quotedAmount);
-        analysisRow(ai, '交付内容', analysis.deliverables);
-        analysisRow(ai, '时间/档期', analysis.timeline);
-        analysisRow(ai, '权益要求', analysis.rightsRequests);
-        analysisRow(ai, '付款要求', analysis.paymentRequests);
-        analysisRow(ai, '风险提示', analysis.riskFlags);
-        analysisRow(ai, '建议动作', actionLabels[analysis.recommendedAction] || analysis.recommendedAction);
-        const draftEditor = element('div', undefined, 'draft-editor');
-        const draftZh = draftTextarea(analysis.replyDraftZh, 'zh');
-        const draftEn = draftTextarea(analysis.replyDraftEn, 'en');
-        const zhLabel = element('label', '中文回复草稿（可编辑）');
-        const enLabel = element('label', 'English Reply Draft（可编辑）');
-        zhLabel.append(draftZh);
-        enLabel.append(draftEn);
-        const draftActions = element('div', undefined, 'actions');
-        draftActions.append(
-          button('根据中文生成英文并保存', async () => {
-            notify('正在翻译并保存，请等待…');
-            await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/draft', {
-              method: 'PUT',
-              body: JSON.stringify({ draftZh: draftZh.value, translate: true })
-            });
-            notify('中英文草稿已保存，英文已尝试写回飞书');
-            await loadMessages(mailboxId, label);
-          }),
-          button('保存当前中英文', async () => {
-            await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/draft', {
-              method: 'PUT',
-              body: JSON.stringify({ draftZh: draftZh.value, draftEn: draftEn.value, translate: false })
-            });
-            notify('当前中英文草稿已保存，英文已尝试写回飞书');
-            await loadMessages(mailboxId, label);
-          })
-        );
-        const recipient = (message.fromAddresses || []).find((address) =>
-          !activeMailbox || address.toLowerCase() !== activeMailbox.emailAddress.toLowerCase()
-        );
-        const sendState = message.sendStatus || 'awaiting_confirmation';
-        if (sendState !== 'sent' && sendState !== 'sending' && activeMailbox && activeMailbox.smtpEnabled && recipient) {
-          const sendButton = button('确认并发送（不可撤回）', async () => {
-            const confirmed = window.confirm(
-              '请最后确认：\\n\\n发件邮箱：' + activeMailbox.emailAddress +
-              '\\n收件人：' + recipient +
-              '\\n主题：' + (message.subject || '(无主题)') +
-              '\\n\\n点击“确定”后邮件会立即发出，无法撤回。'
-            );
-            if (!confirmed) return;
-            notify('正在通过SMTP发送，请勿重复点击或关闭页面…');
-            const result = await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/send', {
-              method: 'POST',
-              body: JSON.stringify({
-                confirm: true,
-                recipient: recipient,
-                draftZh: draftZh.value,
-                draftEn: draftEn.value
-              })
-            });
-            const copyStatus = result.message.sentCopyStatus === 'failed'
-              ? '；邮件已发出，但Sent副本保存失败，请到邮箱服务商确认'
-              : result.message.sentCopyStatus === 'saved'
-                ? '；Sent副本已保存'
-                : '';
-            notify('邮件发送成功' + copyStatus);
-            await loadMessages(mailboxId, label);
-            await loadMailboxes();
-          });
-          sendButton.classList.add('send-confirm');
-          draftActions.append(sendButton);
-          draftEditor.append(element('p', '最终收件人：' + recipient + '。发送前会再次弹窗确认。', 'send-warning'));
-        } else if (sendState === 'sent') {
-          draftEditor.append(element('p', '该回复已经发送，系统已阻止再次发送。', 'muted'));
-        } else if (sendState === 'sending') {
-          draftEditor.append(element('p', '该回复正在发送中，请勿重复操作。', 'muted'));
-        } else if (!activeMailbox || !activeMailbox.smtpEnabled) {
-          draftEditor.append(element('p', '当前邮箱尚未启用试点SMTP发送；可以继续编辑和保存草稿。', 'muted'));
-        } else if (!recipient) {
-          draftEditor.append(element('p', '未找到安全的原始发件人地址，禁止发送。', 'muted'));
-        }
-        draftEditor.append(zhLabel, enLabel, draftActions);
-        ai.append(draftEditor);
         analysisRow(ai, '飞书AI字段', message.aiBaseSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待写回/写回失败' : '未匹配达人，暂不写回');
         if (message.aiAnalyzedAt) analysisRow(ai, '分析时间', new Date(message.aiAnalyzedAt).toLocaleString());
-        if (message.sentAt) analysisRow(ai, '发送时间', new Date(message.sentAt).toLocaleString());
-        if (message.sendErrorCode) analysisRow(ai, '发送错误', message.sendErrorCode, 'failed');
-        if (message.sendStatus === 'sent') {
-          analysisRow(ai, 'Sent副本', message.sentCopyStatus === 'saved' ? '已保存' : message.sentCopyStatus === 'failed' ? '保存失败（邮件本身已发送）' : '由邮箱服务器自动保存/未要求保存');
-          analysisRow(ai, '飞书发送状态', message.sendFeishuSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待后台重试写回' : '无需写回');
-        }
       } else {
         const reason = aiState === 'failed'
           ? '上次分析失败：' + (message.aiErrorCode || '请稍后重试')
           : message.classification === 'creator_reply'
-            ? '点击下方按钮生成中文摘要和英文回复草稿。'
+            ? '点击下方按钮生成中文摘要；报价会同时写回飞书。'
             : '仅达人回复会进入AI分析。';
         ai.append(element('p', reason, 'muted'));
       }

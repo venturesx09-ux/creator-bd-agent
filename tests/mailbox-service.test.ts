@@ -12,6 +12,7 @@ import {
   messagesNeedingMatch,
   MailboxService,
   MailboxServiceError,
+  parseMailboxSource,
   type MailboxConnectionConfig
 } from "../src/mailbox-service.js";
 import { SecretBox } from "../src/secret-box.js";
@@ -110,6 +111,8 @@ class MemoryRepository implements MailboxRepository {
   async markMessageSendFeishuSynced(): Promise<void> {}
   async listKnownUids(): Promise<Set<number>> { return new Set(); }
   async listMessagesNeedingProcessing(): Promise<StoredMessage[]> { return []; }
+  async listMessagesNeedingContentRefresh(): Promise<StoredMessage[]> { return []; }
+  async refreshMessageContent(): Promise<void> {}
   async updateMessageClassification(): Promise<void> {}
   async updateMessageMatch(): Promise<void> {}
   async getUnmatchedRecordId(): Promise<string | undefined> { return undefined; }
@@ -130,6 +133,26 @@ class MemoryRepository implements MailboxRepository {
     };
   }
 }
+
+describe("email body extraction", () => {
+  it("converts HTML-only email bodies to text and preserves quote history", async () => {
+    const source = Buffer.from([
+      "From: Creator <creator@example.com>",
+      "To: Shark <shark@example.com>",
+      "Subject: Re: campaign",
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<p>My rate is <strong>$500 per Reel</strong>.</p>",
+      "<blockquote>Earlier package: $1,200 for three videos.</blockquote>"
+    ].join("\r\n"));
+
+    const parsed = await parseMailboxSource(source);
+
+    assert.match(parsed?.text ?? "", /\$500 per Reel/u);
+    assert.match(parsed?.text ?? "", /\$1,200 for three videos/u);
+  });
+});
 
 describe("MailboxService configuration", () => {
   it("validates and encrypts mailbox credentials before storage", async () => {

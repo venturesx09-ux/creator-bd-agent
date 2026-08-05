@@ -16,10 +16,26 @@ export interface EmailAnalysisProcessor {
   syncSentState(message: MessageSummary, sentAt: Date): Promise<void>;
 }
 
+export function quoteText(analysis: EmailAnalysis): string {
+  const normalized = analysis.quoteNormalizedZh.trim() || analysis.quoteItems
+    .map((item) => item.normalizedTextZh.trim())
+    .filter(Boolean)
+    .join("；");
+  if (!analysis.quoteItems.length && !normalized) {
+    return "未提及报价";
+  }
+  const sections: string[] = [];
+  if (analysis.quoteOriginalText.trim()) {
+    sections.push(`报价原文：${analysis.quoteOriginalText.trim()}`);
+  }
+  sections.push(`标准化报价：${normalized}`);
+  return sections.join("\n");
+}
+
 function analysisFields(analysis: EmailAnalysis): Record<string, unknown> {
   const fields: Record<string, unknown> = {
     "AI中文摘要": analysis.summaryZh,
-    "AI回复草稿": analysis.replyDraftEn
+    "报价": quoteText(analysis)
   };
   if (analysis.quotedAmount !== null) {
     fields["报价金额"] = analysis.quotedAmount;
@@ -69,47 +85,18 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
   }
 
   async translateDraft(
-    message: MessageSummary,
-    draftZh: string
+    _message: MessageSummary,
+    _draftZh: string
   ): Promise<EmailAnalysis> {
-    const normalizedZh = this.validDraft(draftZh);
-    let draftEn: string;
-    try {
-      draftEn = await this.client.translateDraft({
-        draftZh: normalizedZh,
-        ...(message.project ? { project: message.project } : {}),
-        originalEmail: message.textPreview
-      });
-    } catch (error) {
-      throw new Error(safeErrorCode(error));
-    }
-    return this.saveDrafts(message, normalizedZh, draftEn);
+    throw new Error("REPLY_DRAFTS_DISABLED");
   }
 
   async saveDrafts(
-    message: MessageSummary,
-    draftZh: string,
-    draftEn: string
+    _message: MessageSummary,
+    _draftZh: string,
+    _draftEn: string
   ): Promise<EmailAnalysis> {
-    if (!message.analysis) throw new Error("AI_ANALYSIS_REQUIRED");
-    const updated: EmailAnalysis = {
-      ...message.analysis,
-      replyDraftZh: this.validDraft(draftZh),
-      replyDraftEn: this.validDraft(draftEn)
-    };
-    await this.repository.saveMessageAnalysis(
-      message.id,
-      this.secretBox.encrypt(updated),
-      this.client.model
-    );
-    message.analysis = updated;
-    message.aiAnalysisStatus = "completed";
-    message.aiAnalyzedAt = new Date().toISOString();
-    message.aiModel = this.client.model;
-    message.aiBaseSyncStatus = "pending";
-    delete message.aiErrorCode;
-    await this.syncToFeishu(message, updated);
-    return updated;
+    throw new Error("REPLY_DRAFTS_DISABLED");
   }
 
   async syncSentState(message: MessageSummary, sentAt: Date): Promise<void> {
@@ -120,10 +107,7 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
     try {
       await this.feishuClient.updateBaseRecord(message.matchedRecordId, {
         "邮件同步状态": "已发送",
-        "最后联系时间": sentAt.getTime(),
-        ...(message.analysis
-          ? { "AI回复草稿": message.analysis.replyDraftEn }
-          : {})
+        "最后联系时间": sentAt.getTime()
       });
       await this.repository.markMessageSendFeishuSynced(message.id);
       message.sendFeishuSyncStatus = "synced";
@@ -142,7 +126,12 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
     force: boolean
   ): Promise<EmailAnalysis> {
     let analysis = message.analysis;
-    if (force || message.aiAnalysisStatus !== "completed" || !analysis) {
+    if (
+      force ||
+      message.aiAnalysisStatus !== "completed" ||
+      (message.aiAnalysisSchemaVersion ?? 1) < 2 ||
+      !analysis
+    ) {
       try {
         analysis = await this.client.analyze({
           ...(message.project ? { project: message.project } : {}),
@@ -161,6 +150,7 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
         message.aiAnalysisStatus = "completed";
         message.aiAnalyzedAt = new Date().toISOString();
         message.aiModel = this.client.model;
+        message.aiAnalysisSchemaVersion = 2;
         message.aiBaseSyncStatus = "pending";
         delete message.aiErrorCode;
       } catch (error) {
@@ -175,14 +165,6 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
 
     await this.syncToFeishu(message, analysis);
     return analysis;
-  }
-
-  private validDraft(value: string): string {
-    const normalized = value.replace(/\u0000/gu, "").trim();
-    if (!normalized || normalized.length > 4_000) {
-      throw new Error("INVALID_DRAFT");
-    }
-    return normalized;
   }
 
   private async syncToFeishu(

@@ -67,6 +67,7 @@ export type MatchReason =
 export type StoredMessage = {
   id: string;
   uid: number;
+  uidValidity?: string;
   encryptedPayload: string;
   receivedAt?: Date;
   createdAt: Date;
@@ -81,6 +82,7 @@ export type StoredMessage = {
   aiAnalyzedAt?: Date;
   aiErrorCode?: string;
   aiModel?: string;
+  aiAnalysisSchemaVersion?: number;
   aiBaseSyncStatus: AiBaseSyncStatus;
   sendStatus: SendStatus;
   sentAt?: Date;
@@ -158,6 +160,16 @@ export interface MailboxRepository {
     mailboxId: string,
     limit: number
   ): Promise<StoredMessage[]>;
+  listMessagesNeedingContentRefresh(
+    mailboxId: string,
+    uidValidity: string,
+    limit: number
+  ): Promise<StoredMessage[]>;
+  refreshMessageContent(
+    messageId: string,
+    encryptedPayload: string,
+    classification: EmailClassification
+  ): Promise<void>;
   updateMessageClassification(
     messageId: string,
     classification: EmailClassification
@@ -240,6 +252,7 @@ type MailboxRow = {
 type MessageRow = {
   id: string;
   uid: string;
+  uid_validity: string;
   encrypted_payload: string;
   received_at: Date | null;
   created_at: Date;
@@ -254,6 +267,7 @@ type MessageRow = {
   ai_analyzed_at: Date | null;
   ai_error_code: string | null;
   ai_model: string | null;
+  ai_analysis_schema_version: number;
   ai_base_sync_status: AiBaseSyncStatus;
   send_status: SendStatus;
   sent_at: Date | null;
@@ -267,6 +281,7 @@ function messageFromRow(row: MessageRow): StoredMessage {
   return {
     id: row.id,
     uid: Number.parseInt(row.uid, 10),
+    uidValidity: row.uid_validity,
     encryptedPayload: row.encrypted_payload,
     ...(row.received_at ? { receivedAt: row.received_at } : {}),
     createdAt: row.created_at,
@@ -285,6 +300,7 @@ function messageFromRow(row: MessageRow): StoredMessage {
     ...(row.ai_analyzed_at ? { aiAnalyzedAt: row.ai_analyzed_at } : {}),
     ...(row.ai_error_code ? { aiErrorCode: row.ai_error_code } : {}),
     ...(row.ai_model ? { aiModel: row.ai_model } : {}),
+    aiAnalysisSchemaVersion: row.ai_analysis_schema_version ?? 1,
     aiBaseSyncStatus: row.ai_base_sync_status,
     sendStatus: row.send_status,
     ...(row.sent_at ? { sentAt: row.sent_at } : {}),
@@ -417,6 +433,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS ai_analyzed_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS ai_error_code VARCHAR(80),
         ADD COLUMN IF NOT EXISTS ai_model VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS ai_analysis_schema_version INTEGER NOT NULL DEFAULT 1,
         ADD COLUMN IF NOT EXISTS ai_base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
     `);
     await this.pool.query(`
@@ -693,10 +710,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
 
   async listMessages(mailboxId: string, limit: number): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, uid, encrypted_payload, received_at, created_at,
+      `SELECT id, uid, uid_validity, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_analysis_schema_version,
               ai_base_sync_status, send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
@@ -713,10 +731,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
     messageId: string
   ): Promise<StoredMessage | undefined> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, uid, encrypted_payload, received_at, created_at,
+      `SELECT id, uid, uid_validity, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_analysis_schema_version,
               ai_base_sync_status, send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
@@ -891,10 +910,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
     limit: number
   ): Promise<StoredMessage[]> {
     const result = await this.pool.query<MessageRow>(
-      `SELECT id, uid, encrypted_payload, received_at, created_at,
+      `SELECT id, uid, uid_validity, encrypted_payload, received_at, created_at,
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_analysis_schema_version,
               ai_base_sync_status, send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
@@ -903,7 +923,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
               OR (classification = 'creator_reply'
                   AND (match_status <> 'matched'
                        OR base_sync_status <> 'synced'
-                       OR ai_analysis_status = 'pending'
+                       OR ai_analysis_status IN ('pending', 'skipped')
+                       OR ai_analysis_schema_version < 2
+                       OR (ai_analysis_status = 'failed'
+                           AND (ai_analyzed_at IS NULL
+                                OR ai_analyzed_at < NOW() - INTERVAL '30 minutes'))
                        OR (send_status = 'sent'
                            AND send_feishu_sync_status = 'pending')
                        OR (matched_record_id IS NOT NULL
@@ -914,6 +938,50 @@ export class PostgresMailboxRepository implements MailboxRepository {
       [mailboxId, limit]
     );
     return result.rows.map(messageFromRow);
+  }
+
+  async listMessagesNeedingContentRefresh(
+    mailboxId: string,
+    uidValidity: string,
+    limit: number
+  ): Promise<StoredMessage[]> {
+    const result = await this.pool.query<MessageRow>(
+      `SELECT id, uid, uid_validity, encrypted_payload, received_at, created_at,
+              classification, match_status, matched_record_id, base_sync_status,
+              match_reason, unmatched_record_id, ai_analysis_status,
+              encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
+              ai_analysis_schema_version,
+              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              send_error_code, sent_copy_status, send_feishu_sync_status
+       FROM email_messages
+       WHERE mailbox_id = $1 AND uid_validity = $2
+         AND classification = 'creator_reply'
+         AND ai_analysis_schema_version < 2
+       ORDER BY received_at DESC NULLS LAST, created_at DESC
+       LIMIT $3`,
+      [mailboxId, uidValidity, limit]
+    );
+    return result.rows.map(messageFromRow);
+  }
+
+  async refreshMessageContent(
+    messageId: string,
+    encryptedPayload: string,
+    classification: EmailClassification
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages
+       SET encrypted_payload = $2, classification = $3,
+           ai_analysis_status = 'pending', encrypted_ai_analysis = NULL,
+           ai_analyzed_at = NULL, ai_error_code = NULL, ai_model = NULL,
+           ai_analysis_schema_version = 1, ai_base_sync_status = 'pending',
+           send_status = CASE
+             WHEN send_status IN ('sending', 'sent') THEN send_status
+             ELSE 'not_ready'
+           END
+       WHERE id = $1`,
+      [messageId, encryptedPayload, classification]
+    );
   }
 
   async updateMessageClassification(
@@ -972,6 +1040,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
       `UPDATE email_messages
        SET ai_analysis_status = 'completed', encrypted_ai_analysis = $2,
            ai_analyzed_at = NOW(), ai_error_code = NULL, ai_model = $3,
+           ai_analysis_schema_version = 2,
            ai_base_sync_status = 'pending',
            send_status = CASE
              WHEN send_status IN ('sending', 'sent') THEN send_status

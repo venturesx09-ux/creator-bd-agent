@@ -165,6 +165,19 @@ describe("mailbox admin", () => {
         replyType: "interested_with_quote",
         detectedLanguage: "en",
         summaryZh: "达人感兴趣，报价500美元。",
+        quoteOriginalText: "Our rate is USD 500.",
+        quoteNormalizedZh: "总价：USD 500",
+        quoteItems: [{
+          source: "latest_reply",
+          quoteType: "total",
+          originalText: "Our rate is USD 500.",
+          normalizedTextZh: "总价：USD 500",
+          amountMin: 500,
+          amountMax: 500,
+          currency: "USD",
+          unit: null,
+          packageName: null
+        }],
         quotedAmount: 500,
         currency: "USD",
         deliverables: ["1 Reel"],
@@ -173,8 +186,8 @@ describe("mailbox admin", () => {
         paymentRequests: [],
         riskFlags: [],
         recommendedAction: "review_quote",
-        replyDraftZh: "你好，感谢你分享报价，我们会进行内部确认。",
-        replyDraftEn: "Hi, thank you for sharing your rate."
+        replyDraftZh: "",
+        replyDraftEn: ""
       }
     }),
     updateMessageDrafts: async (mailboxId, messageId) =>
@@ -228,19 +241,17 @@ describe("mailbox admin", () => {
     assert.equal(response.body.message.aiBaseSyncStatus, "synced");
   });
 
-  it("protects bilingual draft translation and saving", async () => {
+  it("does not expose the retired reply-draft endpoint", async () => {
     const app = createApp({ config, mailboxService, logger: silentLogger });
     const url = `/api/admin/mailboxes/${mailbox.id}/messages/message_test/draft`;
-    await request(app).put(url).send({ draftZh: "你好", translate: true }).expect(401);
-    const response = await request(app)
+    await request(app)
       .put(url)
       .set("authorization", `Bearer ${ADMIN_TOKEN}`)
       .send({ draftZh: "你好，感谢你的回复。", translate: true })
-      .expect(200);
-    assert.equal(response.body.message.analysis.replyDraftZh.includes("感谢"), true);
+      .expect(404);
   });
 
-  it("protects SMTP configuration and requires explicit confirmation to send", async () => {
+  it("keeps SMTP configuration but does not expose a send endpoint", async () => {
     const app = createApp({ config, mailboxService, logger: silentLogger });
     const auth = { authorization: `Bearer ${ADMIN_TOKEN}` };
     const smtpConfigUrl = `/api/admin/mailboxes/${mailbox.id}/smtp/config`;
@@ -275,19 +286,13 @@ describe("mailbox admin", () => {
     await request(app)
       .post(sendUrl)
       .set(auth)
-      .send({ recipient: "creator@example.com", draftZh: "你好", draftEn: "Hi" })
-      .expect(400);
-    const sent = await request(app)
-      .post(sendUrl)
-      .set(auth)
       .send({
         confirm: true,
         recipient: "creator@example.com",
         draftZh: "你好，感谢回复。",
         draftEn: "Hi, thank you for your reply."
       })
-      .expect(200);
-    assert.equal(sent.body.message.sendStatus, "sent");
+      .expect(404);
   });
 
   it("protects mailbox APIs and returns only safe mailbox metadata", async () => {

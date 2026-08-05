@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { ImapFlow, type ImapFlowOptions } from "imapflow";
-import { simpleParser } from "mailparser";
+import { simpleParser, type ParsedMail } from "mailparser";
 import type {
   DailySummary,
   EmailClassification,
@@ -110,6 +110,7 @@ export type MessageSummary = {
   aiAnalyzedAt?: string;
   aiErrorCode?: string;
   aiModel?: string;
+  aiAnalysisSchemaVersion?: number;
   aiBaseSyncStatus?: AiBaseSyncStatus;
   sendStatus?: SendStatus;
   sentAt?: string;
@@ -464,7 +465,19 @@ function safePreview(value: string | undefined): string {
     .replace(/\u0000/gu, "")
     .replace(/\r\n/gu, "\n")
     .trim()
-    .slice(0, 12_000);
+    .slice(0, 30_000);
+}
+
+export async function parseMailboxSource(
+  source: Buffer
+): Promise<ParsedMail | undefined> {
+  return simpleParser(source, {
+    skipHtmlToText: false,
+    skipTextToHtml: true,
+    skipImageLinks: true,
+    skipTextLinks: true,
+    maxHtmlLengthToParse: 512 * 1024
+  }).catch(() => undefined);
 }
 
 function imapError(error: unknown, fallbackCode: string): MailboxServiceError {
@@ -720,11 +733,23 @@ export class MailboxService implements MailboxServiceLike {
           uidValidity,
           unseenUids
         );
-        const syncUids = mergeSyncUids(
-          incrementalUids,
-          unseenUids,
-          knownUnseenUids
+        const contentRefreshRows = await this.repository
+          .listMessagesNeedingContentRefresh(
+            id,
+            uidValidity,
+            SYNC_BATCH_SIZE
+          );
+        const refreshByUid = new Map(
+          contentRefreshRows.map((message) => [message.uid, message])
         );
+        const syncUids = [...new Set([
+          ...mergeSyncUids(
+            incrementalUids,
+            unseenUids,
+            knownUnseenUids
+          ),
+          ...refreshByUid.keys()
+        ])].sort((left, right) => left - right);
 
         if (syncUids.length === 0) {
           await this.repository.saveMessagesAndCursor({
@@ -759,13 +784,7 @@ export class MailboxService implements MailboxServiceLike {
         const stored: StoredMessageInput[] = [];
         for (const item of fetched) {
           const parsed = item.source
-            ? await simpleParser(item.source, {
-                skipHtmlToText: true,
-                skipTextToHtml: true,
-                skipImageLinks: true,
-                skipTextLinks: true,
-                maxHtmlLengthToParse: 0
-              }).catch(() => undefined)
+            ? await parseMailboxSource(item.source)
             : undefined;
           const messageId =
             item.envelope?.messageId ||
@@ -797,25 +816,35 @@ export class MailboxService implements MailboxServiceLike {
             }),
             matchStatus: "pending"
           };
+          const refreshRow = refreshByUid.get(item.uid);
           const summary: MessageSummary = {
-            id: randomUUID(),
+            id: refreshRow?.id ?? randomUUID(),
             uid: item.uid,
             ...payload
           };
           messages.push(summary);
-          stored.push({
-            id: summary.id,
-            uid: item.uid,
-            uidValidity,
-            messageKeyHash: createHash("sha256")
-              .update(messageId.trim().toLowerCase())
-              .digest("hex"),
-            encryptedPayload: this.secretBox.encrypt(payload),
-            classification: payload.classification,
-            ...(receivedAt && !Number.isNaN(receivedAt.getTime())
-              ? { receivedAt }
-              : {})
-          });
+          const encryptedPayload = this.secretBox.encrypt(payload);
+          if (refreshRow) {
+            await this.repository.refreshMessageContent(
+              refreshRow.id,
+              encryptedPayload,
+              payload.classification
+            );
+          } else {
+            stored.push({
+              id: summary.id,
+              uid: item.uid,
+              uidValidity,
+              messageKeyHash: createHash("sha256")
+                .update(messageId.trim().toLowerCase())
+                .digest("hex"),
+              encryptedPayload,
+              classification: payload.classification,
+              ...(receivedAt && !Number.isNaN(receivedAt.getTime())
+                ? { receivedAt }
+                : {})
+            });
+          }
         }
 
         const inserted = await this.repository.saveMessagesAndCursor({
@@ -1218,6 +1247,7 @@ export class MailboxService implements MailboxServiceLike {
         : {}),
       ...(row.aiErrorCode ? { aiErrorCode: row.aiErrorCode } : {}),
       ...(row.aiModel ? { aiModel: row.aiModel } : {}),
+      aiAnalysisSchemaVersion: row.aiAnalysisSchemaVersion ?? 1,
       aiBaseSyncStatus: row.aiBaseSyncStatus,
       sendStatus: row.sendStatus,
       ...(row.sentAt ? { sentAt: row.sentAt.toISOString() } : {}),
@@ -1261,7 +1291,8 @@ export class MailboxService implements MailboxServiceLike {
       for (const message of messages) {
         const shouldAnalyze =
           message.classification === "creator_reply" &&
-          (message.aiAnalysisStatus === "pending" ||
+          ((message.aiAnalysisSchemaVersion ?? 1) < 2 ||
+            message.aiAnalysisStatus === "pending" ||
             (message.aiAnalysisStatus === "completed" &&
               message.matchedRecordId !== undefined &&
               message.aiBaseSyncStatus !== "synced"));

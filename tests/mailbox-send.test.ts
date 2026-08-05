@@ -21,6 +21,9 @@ const analysis = {
   replyType: "interested_without_quote" as const,
   detectedLanguage: "en",
   summaryZh: "达人感兴趣。",
+  quoteOriginalText: "",
+  quoteNormalizedZh: "",
+  quoteItems: [],
   quotedAmount: null,
   currency: null,
   deliverables: [],
@@ -29,12 +32,12 @@ const analysis = {
   paymentRequests: [],
   riskFlags: [],
   recommendedAction: "ask_for_quote" as const,
-  replyDraftZh: "你好，感谢你的回复。",
-  replyDraftEn: "Hi, thank you for your reply."
+  replyDraftZh: "",
+  replyDraftEn: ""
 };
 
-describe("manual SMTP reply", () => {
-  it("sends once to the original sender with thread headers after explicit confirmation", async () => {
+describe("retired SMTP reply flow", () => {
+  it("does not send when reply drafting is disabled", async () => {
     const secretBox = new SecretBox(Buffer.alloc(32, 4).toString("base64"));
     const mailbox: StoredMailbox = {
       id: "mailbox-id",
@@ -113,13 +116,8 @@ describe("manual SMTP reply", () => {
       markMessageSendFeishuSynced: async () => undefined
     } as unknown as MailboxRepository;
     const analysisProcessor = {
-      saveDrafts: async (
-        message: MessageSummary,
-        draftZh: string,
-        draftEn: string
-      ) => {
-        message.analysis = { ...analysis, replyDraftZh: draftZh, replyDraftEn: draftEn };
-        return message.analysis;
+      saveDrafts: async () => {
+        throw new Error("REPLY_DRAFTS_DISABLED");
       },
       syncSentState: async (message: MessageSummary) => {
         message.sendFeishuSyncStatus = "synced";
@@ -144,25 +142,6 @@ describe("manual SMTP reply", () => {
       smtpFactory
     );
 
-    const result = await service.sendReply(mailbox.id, storedMessage.id, {
-      confirm: true,
-      recipient: "creator@example.org",
-      draftZh: analysis.replyDraftZh,
-      draftEn: analysis.replyDraftEn
-    });
-
-    assert.equal(result.sendStatus, "sent");
-    assert.equal(result.sendFeishuSyncStatus, "synced");
-    assert.equal(sentRecords, 1);
-    assert.equal(sentOptions.length, 1);
-    assert.equal(sentOptions[0]?.to, "creator@example.org");
-    assert.equal(sentOptions[0]?.subject, "Re: Paid collaboration");
-    assert.equal(sentOptions[0]?.inReplyTo, "<original@example.org>");
-    assert.deepEqual(sentOptions[0]?.references, [
-      "<older@example.org>",
-      "<original@example.org>"
-    ]);
-
     await assert.rejects(
       service.sendReply(mailbox.id, storedMessage.id, {
         confirm: true,
@@ -172,8 +151,9 @@ describe("manual SMTP reply", () => {
       }),
       (error: unknown) =>
         error instanceof MailboxServiceError &&
-        error.errorCode === "MESSAGE_ALREADY_SENT"
+        error.errorCode === "REPLY_DRAFTS_DISABLED"
     );
-    assert.equal(sentOptions.length, 1);
+    assert.equal(sentRecords, 0);
+    assert.equal(sentOptions.length, 0);
   });
 });

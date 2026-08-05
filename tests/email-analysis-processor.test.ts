@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { MailboxRepository } from "../src/database.js";
 import {
   EmailAnalysisSchema,
+  parseStoredEmailAnalysis,
   type EmailAnalysis,
   type EmailAnalysisClient
 } from "../src/email-analysis.js";
@@ -15,6 +16,19 @@ const analysis: EmailAnalysis = {
   replyType: "interested_with_quote",
   detectedLanguage: "en",
   summaryZh: "达人感兴趣，报价500美元并询问付款周期。",
+  quoteOriginalText: "Our rate is USD 500.",
+  quoteNormalizedZh: "1条Instagram Reel总价：USD 500",
+  quoteItems: [{
+    source: "latest_reply",
+    quoteType: "total",
+    originalText: "Our rate is USD 500.",
+    normalizedTextZh: "1条Instagram Reel总价：USD 500",
+    amountMin: 500,
+    amountMax: 500,
+    currency: "USD",
+    unit: null,
+    packageName: null
+  }],
   quotedAmount: 500,
   currency: "USD",
   deliverables: ["1 Instagram Reel"],
@@ -23,14 +37,53 @@ const analysis: EmailAnalysis = {
   paymentRequests: ["asks about payment timing"],
   riskFlags: [],
   recommendedAction: "review_quote",
-  replyDraftZh: "你好，感谢你分享报价，我们会进行内部确认。",
-  replyDraftEn: "Hi, thank you for sharing your rate. We will review it internally."
+  replyDraftZh: "",
+  replyDraftEn: ""
 };
 
 describe("AI email analysis", () => {
   it("validates the structured analysis contract", () => {
     assert.deepEqual(EmailAnalysisSchema.parse(analysis), analysis);
     assert.throws(() => EmailAnalysisSchema.parse({ ...analysis, currency: "dollars" }));
+  });
+
+  it("upgrades previously stored single-amount analyses without losing data", () => {
+    const previous = {
+      ...analysis,
+      quoteOriginalText: undefined,
+      quoteNormalizedZh: undefined,
+      quoteItems: undefined
+    };
+    const upgraded = parseStoredEmailAnalysis(previous);
+    assert.equal(upgraded?.quoteNormalizedZh, "USD 500");
+    assert.equal(upgraded?.quoteItems[0]?.quoteType, "total");
+    assert.equal(upgraded?.quotedAmount, 500);
+  });
+
+  it("formats ranges and multiple packages without inventing one total", () => {
+    const packages: EmailAnalysis = {
+      ...analysis,
+      quoteOriginalText: "$500 per Reel; package of 3 for $1,200",
+      quoteNormalizedZh: "单条Reel：USD 500；3条套餐：USD 1,200",
+      quoteItems: [{
+        source: "latest_reply", quoteType: "unit",
+        originalText: "$500 per Reel", normalizedTextZh: "单条Reel：USD 500",
+        amountMin: 500, amountMax: 500, currency: "USD",
+        unit: "每条Reel", packageName: null
+      }, {
+        source: "latest_reply", quoteType: "package",
+        originalText: "package of 3 for $1,200",
+        normalizedTextZh: "3条套餐：USD 1,200",
+        amountMin: 1200, amountMax: 1200, currency: "USD",
+        unit: null, packageName: "3条套餐"
+      }],
+      quotedAmount: null,
+      currency: null
+    };
+    assert.equal(
+      EmailAnalysisSchema.parse(packages).quoteItems.length,
+      2
+    );
   });
 
   it("encrypts stored analysis and writes only approved AI fields to Feishu", async () => {
@@ -54,8 +107,7 @@ describe("AI email analysis", () => {
     } as unknown as MailboxRepository;
     const client: EmailAnalysisClient = {
       model: "gpt-5.6-luna",
-      analyze: async () => analysis,
-      translateDraft: async () => "Hi, thanks for your reply."
+      analyze: async () => analysis
     };
     const feishuClient = {
       updateBaseRecord: async (
@@ -96,7 +148,11 @@ describe("AI email analysis", () => {
     assert.equal(savedModel, "gpt-5.6-luna");
     assert.equal(writtenRecord, "rec123");
     assert.equal(writtenFields["AI中文摘要"], analysis.summaryZh);
-    assert.equal(writtenFields["AI回复草稿"], analysis.replyDraftEn);
+    assert.equal("AI回复草稿" in writtenFields, false);
+    assert.equal(
+      writtenFields["报价"],
+      "报价原文：Our rate is USD 500.\n标准化报价：1条Instagram Reel总价：USD 500"
+    );
     assert.equal(writtenFields["报价金额"], 500);
     assert.equal(writtenFields["报价币种"], "USD");
     assert.equal(writtenFields["交付内容"], "1 Instagram Reel");
@@ -105,37 +161,66 @@ describe("AI email analysis", () => {
     assert.equal(message.aiBaseSyncStatus, "synced");
   });
 
-  it("translates an edited Chinese draft and persists the bilingual pair", async () => {
-    const secretBox = new SecretBox(Buffer.alloc(32, 5).toString("base64"));
-    let encrypted = "";
+  it("always writes a Chinese summary and an explicit no-quote placeholder", async () => {
+    const noQuoteAnalysis: EmailAnalysis = {
+      ...analysis,
+      replyType: "interested_without_quote",
+      summaryZh: "达人表示有兴趣，但邮件中没有提及报价。",
+      quoteOriginalText: "",
+      quoteNormalizedZh: "",
+      quoteItems: [],
+      quotedAmount: null,
+      currency: null,
+      recommendedAction: "ask_for_quote"
+    };
+    let writtenFields: Record<string, unknown> = {};
     const repository = {
-      saveMessageAnalysis: async (
-        _messageId: string,
-        encryptedAnalysis: string
-      ) => { encrypted = encryptedAnalysis; },
+      saveMessageAnalysis: async () => undefined,
+      recordMessageAnalysisFailure: async () => undefined,
       markMessageAnalysisSynced: async () => undefined
     } as unknown as MailboxRepository;
     const client: EmailAnalysisClient = {
       model: "gpt-5.6-luna",
-      analyze: async () => analysis,
-      translateDraft: async () => "Hi, thank you. We will confirm internally."
+      analyze: async () => noQuoteAnalysis
     };
     const feishuClient = {
-      updateBaseRecord: async () => undefined
+      updateBaseRecord: async (
+        _recordId: string,
+        fields: Record<string, unknown>
+      ) => { writtenFields = fields; }
     } as unknown as FeishuClient;
     const message: MessageSummary = {
-      id: "message-2", uid: 2, subject: "Re", from: [], fromAddresses: [],
-      to: [], messageId: "m2", references: [], textPreview: "Thanks",
+      id: "message-no-quote", uid: 3, subject: "Re", from: [],
+      fromAddresses: ["creator@example.com"], to: [], messageId: "m3",
+      references: [], textPreview: "I am interested.",
       classification: "creator_reply", matchStatus: "matched",
-      matchedRecordId: "rec2", aiAnalysisStatus: "completed",
-      aiBaseSyncStatus: "synced", analysis
+      matchedRecordId: "rec3", aiAnalysisStatus: "pending",
+      aiBaseSyncStatus: "pending"
     };
+
+    await new DefaultEmailAnalysisProcessor(
+      client,
+      repository,
+      new SecretBox(Buffer.alloc(32, 6).toString("base64")),
+      feishuClient
+    ).process(message);
+
+    assert.equal(writtenFields["AI中文摘要"], noQuoteAnalysis.summaryZh);
+    assert.equal(writtenFields["报价"], "未提及报价");
+    assert.equal("报价金额" in writtenFields, false);
+    assert.equal("报价币种" in writtenFields, false);
+  });
+
+  it("keeps reply drafting disabled", async () => {
     const processor = new DefaultEmailAnalysisProcessor(
-      client, repository, secretBox, feishuClient
+      { model: "gpt-5.6-luna", analyze: async () => analysis },
+      {} as MailboxRepository,
+      new SecretBox(Buffer.alloc(32, 5).toString("base64")),
+      {} as FeishuClient
     );
-    await processor.translateDraft(message, "你好，感谢回复，我们会内部确认。");
-    const stored = secretBox.decrypt<EmailAnalysis>(encrypted);
-    assert.equal(stored.replyDraftZh, "你好，感谢回复，我们会内部确认。");
-    assert.equal(stored.replyDraftEn, "Hi, thank you. We will confirm internally.");
+    await assert.rejects(
+      processor.translateDraft({} as MessageSummary, "你好"),
+      /REPLY_DRAFTS_DISABLED/u
+    );
   });
 });
