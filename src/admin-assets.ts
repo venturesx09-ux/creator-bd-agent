@@ -483,18 +483,8 @@ export const ADMIN_JS = `(() => {
       if (message.textPreview) original.append(element('p', message.textPreview.slice(0, 3000), 'message-body'));
 
       const ai = element('section', undefined, 'message-column ai');
-      ai.append(element('h4', 'AI分析（仅供人工确认）'));
+      ai.append(element('h4', 'AI自动分析'));
       const analysis = message.analysis;
-      if (message.classification === 'creator_reply') {
-        const aiActions = element('div', undefined, 'actions ai-actions');
-        aiActions.append(button(analysis ? '重新分析' : 'AI分析', async () => {
-          notify('正在调用AI分析，请等待…');
-          await api('/api/admin/mailboxes/' + mailboxId + '/messages/' + message.id + '/analyze', { method: 'POST' });
-          notify('AI分析已完成；如已匹配达人，系统也已尝试写回飞书');
-          await loadMessages(mailboxId, label);
-        }));
-        ai.append(aiActions);
-      }
       if (analysis) {
         analysisRow(ai, '中文摘要', analysis.summaryZh);
         analysisRow(ai, '飞书AI字段', message.aiBaseSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待写回/写回失败' : '未匹配达人，暂不写回');
@@ -503,7 +493,7 @@ export const ADMIN_JS = `(() => {
         const reason = aiState === 'failed'
           ? '上次分析失败：' + (message.aiErrorCode || '请稍后重试')
           : message.classification === 'creator_reply'
-            ? '点击下方按钮生成中文摘要；报价会同时写回飞书。'
+            ? '系统正在自动生成中文摘要和报价，并在完成后写回飞书。'
             : '仅达人回复会进入AI分析。';
         ai.append(element('p', reason, 'muted'));
       }

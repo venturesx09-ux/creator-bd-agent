@@ -1,4 +1,4 @@
-# Creator BD Agent — Phase 5.2.0
+# Creator BD Agent — Phase 5.2.1
 
 这是Creator BD Agent的“邮件分析与飞书写回工作台”。当前版本保留IMAP只读同步、飞书匹配和AI分析，并暂停旧的回复草稿与邮件发送界面：
 
@@ -7,7 +7,7 @@
 - 当前不生成任何中英文回复草稿，回复模板和界面留待后续重新设计；
 - AI分析结果使用AES-256-GCM加密后保存到PostgreSQL；
 - 匹配达人后，把`AI中文摘要`、`报价`、`报价金额`、`报价币种`、`权益要求`写回飞书；没有识别到报价时，`报价`固定写入`未提及报价`；
-- 管理页提供原邮件/AI结果双栏查看和“AI分析/重新分析”按钮；
+- 管理页提供原邮件/AI结果双栏查看；AI分析自动执行，不显示“AI分析/重新分析”按钮；
 - 管理页左侧展示邮件正文，右侧只显示中文摘要；报价分析继续写回飞书，但不在当前界面展开；不提供草稿编辑或邮件发送入口；
 - OpenAI请求不持久化到OpenAI服务（`store: false`），API Key不进入代码、响应或日志；
 
@@ -68,7 +68,7 @@
 | PATCH | `/api/admin/mailboxes/:mailboxId/smtp/status` | ADMIN_TOKEN | 启用或停用唯一试点SMTP邮箱 |
 | POST | `/api/admin/mailboxes/:mailboxId/sync` | ADMIN_TOKEN | 手动执行IMAP只读同步 |
 | GET | `/api/admin/mailboxes/:mailboxId/messages` | ADMIN_TOKEN | 查看已同步邮件摘要 |
-| POST | `/api/admin/mailboxes/:mailboxId/messages/:messageId/analyze` | ADMIN_TOKEN | 手动分析或重新分析一封达人回复 |
+| POST | `/api/admin/mailboxes/:mailboxId/messages/:messageId/analyze` | ADMIN_TOKEN | 保留的受保护诊断接口；日常流程无需调用 |
 | PATCH | `/api/admin/mailboxes/:mailboxId/status` | ADMIN_TOKEN | 启用或停用邮箱 |
 | DELETE | `/api/admin/mailboxes/:mailboxId` | ADMIN_TOKEN | 删除没有同步记录的空邮箱 |
 | GET | `/api/admin/daily-summary` | ADMIN_TOKEN | 过去24小时分类与匹配统计 |
@@ -222,7 +222,7 @@ AI回复草稿功能当前已停用：模型固定返回空草稿，工作台不
 | `交付内容` | 多行文本 |
 | `权益要求` | 多行文本 |
 
-如果AI已经分析成功、但飞书某个字段不存在或单选值不可用，工作台仍会显示结果，并显示`等待写回/写回失败`；修好字段后点击`重新分析`即可再次写回。
+如果AI已经分析成功、但飞书某个字段不存在或单选值不可用，工作台会显示`等待写回/写回失败`；修好飞书字段后，后台同步会自动重试写回，无需点击AI分析。
 
 ## 回复功能状态
 

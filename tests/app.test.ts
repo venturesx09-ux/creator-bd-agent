@@ -225,7 +225,8 @@ describe("mailbox admin", () => {
     assert.match(response.text, /全部同步/u);
     assert.match(response.text, /刷新概览/u);
     assert.match(ADMIN_JS, /sessionStorage/u);
-    assert.match(ADMIN_JS, /重新分析/u);
+    assert.doesNotMatch(ADMIN_JS, /重新分析|正在调用AI分析/u);
+    assert.match(ADMIN_JS, /系统正在自动生成中文摘要和报价/u);
     assert.doesNotThrow(() => new Function(ADMIN_JS));
   });
 
