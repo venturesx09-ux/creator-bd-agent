@@ -6,7 +6,9 @@ import {
   buildCreatorEmailIndex,
   extractHistoricalCreatorIds,
   extractSubjectCreatorIds,
-  FeishuCreatorMatcher
+  FeishuCreatorMatcher,
+  replyAggregateFields,
+  replyDetailLine
 } from "../src/feishu-creator-matcher.js";
 import type { FeishuClient } from "../src/feishu-client.js";
 import type { MessageSummary } from "../src/mailbox-service.js";
@@ -291,5 +293,27 @@ describe("Feishu creator matching", () => {
     assert.equal("合作阶段" in fields, false);
     assert.equal(fields["最近发件邮箱"], "creator@example.com");
     assert.equal(fields["最后联系时间"], Date.parse("2026-08-04T12:00:00.000Z"));
+  });
+
+  it("formats exact reply counts and real received times for the same Base row", () => {
+    const first = new Date("2026-08-01T06:32:00.000Z");
+    const latest = new Date("2026-08-03T01:15:00.000Z");
+    const line = replyDetailLine({
+      id: "msg-detail", uid: 1, subject: "Re: Collaboration",
+      from: [], fromAddresses: ["creator@example.com"], to: [],
+      messageId: "mail-detail", references: [], textPreview: "",
+      classification: "creator_reply", matchStatus: "matched",
+      receivedAt: first.toISOString()
+    });
+    const fields = replyAggregateFields({
+      count: 2,
+      firstReceivedAt: first,
+      latestReceivedAt: latest,
+      detailLines: [line, "2026-08-03 09:15（北京时间）｜creator@example.com｜Re: Collaboration"]
+    });
+    assert.equal(fields["累计回复邮件数"], 2);
+    assert.equal(fields["首次回复时间"], first.getTime());
+    assert.equal(fields["最近回复时间"], latest.getTime());
+    assert.match(String(fields["回复邮件明细"]), /2026-08-01 14:32（北京时间）/u);
   });
 });

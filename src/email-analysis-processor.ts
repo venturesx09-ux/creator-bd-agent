@@ -50,6 +50,15 @@ function analysisFields(analysis: EmailAnalysis): Record<string, unknown> {
   return fields;
 }
 
+function unmatchedAnalysisFields(
+  analysis: EmailAnalysis
+): Record<string, unknown> {
+  return {
+    "AI中文摘要": analysis.summaryZh,
+    "报价": quoteText(analysis)
+  };
+}
+
 function safeErrorCode(error: unknown): string {
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
     return "OPENAI_TIMEOUT";
@@ -182,6 +191,27 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
       } catch (error) {
         console.error(JSON.stringify({
           event: "feishu_ai_analysis_writeback_failed",
+          messageId: message.id,
+          message: error instanceof Error ? error.message : "Internal error"
+        }));
+      }
+    }
+    if (
+      !message.matchedRecordId &&
+      message.matchStatus === "unmatched" &&
+      this.feishuClient.isUnmatchedTableConfigured()
+    ) {
+      try {
+        const queueRecordId = await this.repository.getUnmatchedRecordId(message.id);
+        if (queueRecordId) {
+          await this.feishuClient.updateUnmatchedRecord(
+            queueRecordId,
+            unmatchedAnalysisFields(analysis)
+          );
+        }
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "feishu_unmatched_ai_writeback_failed",
           messageId: message.id,
           message: error instanceof Error ? error.message : "Internal error"
         }));

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  CreatorReplyAggregate,
   FeishuCreatorIdIndexEntry,
   FeishuEmailIndexEntry,
   MatchReason,
@@ -7,6 +8,7 @@ import type {
 } from "./database.js";
 import { FeishuClient, type FeishuBaseRecord } from "./feishu-client.js";
 import { FeishuProgressTracker } from "./feishu-progress.js";
+import { quoteText } from "./email-analysis-processor.js";
 import type { CreatorMatcher, MessageSummary } from "./mailbox-service.js";
 
 const EMAIL_PATTERN_SOURCE = "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}";
@@ -224,6 +226,10 @@ function unmatchedFieldsForMessage(
   if (Number.isFinite(receivedAt)) fields["收件时间"] = receivedAt;
   if (message.project) fields["项目"] = message.project;
   if (message.mailboxEmail) fields["收件邮箱"] = message.mailboxEmail;
+  if (message.analysis) {
+    fields["AI中文摘要"] = message.analysis.summaryZh;
+    fields["报价"] = quoteText(message.analysis);
+  }
   return fields;
 }
 
@@ -268,6 +274,53 @@ export function baseFieldsForMessage(
   ) {
     fields["合作阶段"] = "已回复";
   }
+  return fields;
+}
+
+const MAX_REPLY_DETAIL_CHARACTERS = 50_000;
+
+function beijingTime(value: string | undefined): string {
+  const date = value ? new Date(value) : undefined;
+  if (!date || Number.isNaN(date.getTime())) return "时间未知";
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((entry) => entry.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
+}
+
+export function replyDetailLine(message: MessageSummary): string {
+  const sender = (message.fromAddresses[0] ?? message.from[0] ?? "发件人未知")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 320);
+  const subject = message.subject.replace(/\s+/gu, " ").trim().slice(0, 500);
+  return `${beijingTime(message.receivedAt)}（北京时间）｜${sender}｜${subject || "(无主题)"}`;
+}
+
+export function replyAggregateFields(
+  aggregate: CreatorReplyAggregate
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    "累计回复邮件数": aggregate.count
+  };
+  if (aggregate.firstReceivedAt) {
+    fields["首次回复时间"] = aggregate.firstReceivedAt.getTime();
+  }
+  if (aggregate.latestReceivedAt) {
+    fields["最近回复时间"] = aggregate.latestReceivedAt.getTime();
+  }
+  const allDetails = aggregate.detailLines.join("\n");
+  fields["回复邮件明细"] = allDetails.length <= MAX_REPLY_DETAIL_CHARACTERS
+    ? allDetails
+    : `较早记录因字段长度限制已省略；累计数量仍为准确值。\n${allDetails.slice(-MAX_REPLY_DETAIL_CHARACTERS)}`;
   return fields;
 }
 
@@ -389,7 +442,25 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
         const resolution = resolveMessageRecord(message, indexes);
         const matchedRecord = resolution.record;
         if (matchedRecord) {
-          const fields = baseFieldsForMessage(message, matchedRecord);
+          let aggregateFields: Record<string, unknown> = {};
+          if (this.repository.recordCreatorReplyEvent) {
+            const receivedAt = message.receivedAt
+              ? new Date(message.receivedAt)
+              : undefined;
+            const aggregate = await this.repository.recordCreatorReplyEvent({
+              messageId: message.id,
+              recordId: matchedRecord.record_id,
+              ...(receivedAt && !Number.isNaN(receivedAt.getTime())
+                ? { receivedAt }
+                : {}),
+              detailLine: replyDetailLine(message)
+            });
+            aggregateFields = replyAggregateFields(aggregate);
+          }
+          const fields = {
+            ...baseFieldsForMessage(message, matchedRecord),
+            ...aggregateFields
+          };
           await this.feishuClient.updateBaseRecord(
             matchedRecord.record_id,
             fields
@@ -406,9 +477,11 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
             matchedRecord.record_id,
             resolution.reason
           );
+          await this.repository.markMessageReplyAggregateSynced?.(message.id);
           message.matchStatus = "matched";
           message.matchedRecordId = matchedRecord.record_id;
           message.matchReason = resolution.reason;
+          message.replyAggregateSyncStatus = "synced";
           await this.resolveUnmatchedQueueRecord(
             message,
             matchedRecord.record_id,
@@ -506,6 +579,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
   private async getIndexes(): Promise<CreatorIndexes> {
     const now = Date.now();
     if (this.cachedIndex && this.cachedIndex.expiresAt > now) {
+      this.progress.indexReady(this.cachedIndex.value.emails.size, "database");
       return this.cachedIndex.value;
     }
     if (this.indexRequest) return this.indexRequest;

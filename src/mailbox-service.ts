@@ -112,6 +112,7 @@ export type MessageSummary = {
   aiModel?: string;
   aiAnalysisSchemaVersion?: number;
   aiBaseSyncStatus?: AiBaseSyncStatus;
+  replyAggregateSyncStatus?: import("./database.js").ReplyAggregateSyncStatus;
   sendStatus?: SendStatus;
   sentAt?: string;
   sentMessageId?: string;
@@ -449,7 +450,8 @@ export function messagesNeedingMatch(
 ): MessageSummary[] {
   return messages.filter((message) =>
     message.classification === "creator_reply" &&
-    message.matchStatus !== "matched"
+    (message.matchStatus !== "matched" ||
+      message.replyAggregateSyncStatus !== "synced")
   );
 }
 
@@ -1249,6 +1251,9 @@ export class MailboxService implements MailboxServiceLike {
       ...(row.aiModel ? { aiModel: row.aiModel } : {}),
       aiAnalysisSchemaVersion: row.aiAnalysisSchemaVersion ?? 1,
       aiBaseSyncStatus: row.aiBaseSyncStatus,
+      ...(row.replyAggregateSyncStatus
+        ? { replyAggregateSyncStatus: row.replyAggregateSyncStatus }
+        : {}),
       sendStatus: row.sendStatus,
       ...(row.sentAt ? { sentAt: row.sentAt.toISOString() } : {}),
       ...(row.sentMessageId ? { sentMessageId: row.sentMessageId } : {}),

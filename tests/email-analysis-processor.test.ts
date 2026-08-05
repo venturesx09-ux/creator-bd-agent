@@ -211,6 +211,45 @@ describe("AI email analysis", () => {
     assert.equal("报价币种" in writtenFields, false);
   });
 
+  it("writes AI summary and quote into the unmatched-mail table", async () => {
+    let writtenRecord = "";
+    let writtenFields: Record<string, unknown> = {};
+    const repository = {
+      saveMessageAnalysis: async () => undefined,
+      recordMessageAnalysisFailure: async () => undefined,
+      getUnmatchedRecordId: async () => "rec_unmatched"
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      isUnmatchedTableConfigured: () => true,
+      updateUnmatchedRecord: async (
+        recordId: string,
+        fields: Record<string, unknown>
+      ) => {
+        writtenRecord = recordId;
+        writtenFields = fields;
+      }
+    } as unknown as FeishuClient;
+    const message: MessageSummary = {
+      id: "message-unmatched", uid: 4, subject: "Re", from: [],
+      fromAddresses: ["agent@example.com"], to: [], messageId: "m4",
+      references: [], textPreview: "Our rate is USD 500.",
+      classification: "creator_reply", matchStatus: "unmatched",
+      aiAnalysisStatus: "pending", aiBaseSyncStatus: "pending"
+    };
+
+    await new DefaultEmailAnalysisProcessor(
+      { model: "gpt-5.6-luna", analyze: async () => analysis },
+      repository,
+      new SecretBox(Buffer.alloc(32, 7).toString("base64")),
+      feishuClient
+    ).process(message);
+
+    assert.equal(writtenRecord, "rec_unmatched");
+    assert.equal(writtenFields["AI中文摘要"], analysis.summaryZh);
+    assert.match(String(writtenFields["报价"]), /标准化报价/u);
+    assert.deepEqual(Object.keys(writtenFields).sort(), ["AI中文摘要", "报价"].sort());
+  });
+
   it("keeps reply drafting disabled", async () => {
     const processor = new DefaultEmailAnalysisProcessor(
       { model: "gpt-5.6-luna", analyze: async () => analysis },

@@ -286,7 +286,7 @@ describe("email rule classification", () => {
 });
 
 describe("email rematching", () => {
-  it("retries both pending and previously unmatched messages", () => {
+  it("retries pending, unmatched, and matched messages awaiting reply aggregation", () => {
     const base = {
       uid: 1, subject: "Re", from: [], fromAddresses: [], to: [],
       messageId: "m", references: [], textPreview: "",
@@ -295,7 +295,18 @@ describe("email rematching", () => {
     const result = messagesNeedingMatch([
       { ...base, id: "pending", matchStatus: "pending" },
       { ...base, id: "unmatched", matchStatus: "unmatched" },
-      { ...base, id: "matched", matchStatus: "matched" },
+      {
+        ...base,
+        id: "matched-synced",
+        matchStatus: "matched",
+        replyAggregateSyncStatus: "synced"
+      },
+      {
+        ...base,
+        id: "matched-needs-aggregate",
+        matchStatus: "matched",
+        replyAggregateSyncStatus: "pending"
+      },
       {
         ...base,
         id: "automatic-with-creator-id",
@@ -304,7 +315,11 @@ describe("email rematching", () => {
         matchStatus: "pending"
       }
     ]);
-    assert.deepEqual(result.map((message) => message.id), ["pending", "unmatched"]);
+    assert.deepEqual(result.map((message) => message.id), [
+      "pending",
+      "unmatched",
+      "matched-needs-aggregate"
+    ]);
   });
 });
 

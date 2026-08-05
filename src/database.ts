@@ -48,6 +48,7 @@ export type AiAnalysisStatus =
   | "failed"
   | "skipped";
 export type AiBaseSyncStatus = "pending" | "synced";
+export type ReplyAggregateSyncStatus = "pending" | "synced";
 export type SendStatus =
   | "not_ready"
   | "awaiting_confirmation"
@@ -84,12 +85,20 @@ export type StoredMessage = {
   aiModel?: string;
   aiAnalysisSchemaVersion?: number;
   aiBaseSyncStatus: AiBaseSyncStatus;
+  replyAggregateSyncStatus?: ReplyAggregateSyncStatus;
   sendStatus: SendStatus;
   sentAt?: Date;
   sentMessageId?: string;
   sendErrorCode?: string;
   sentCopyStatus: SentCopyStatus;
   sendFeishuSyncStatus: SendFeishuSyncStatus;
+};
+
+export type CreatorReplyAggregate = {
+  count: number;
+  firstReceivedAt?: Date;
+  latestReceivedAt?: Date;
+  detailLines: string[];
 };
 
 export type DailySummary = {
@@ -182,6 +191,13 @@ export interface MailboxRepository {
   ): Promise<void>;
   getUnmatchedRecordId(messageId: string): Promise<string | undefined>;
   setUnmatchedRecordId(messageId: string, recordId: string): Promise<void>;
+  recordCreatorReplyEvent?(input: {
+    messageId: string;
+    recordId: string;
+    receivedAt?: Date;
+    detailLine: string;
+  }): Promise<CreatorReplyAggregate>;
+  markMessageReplyAggregateSynced?(messageId: string): Promise<void>;
   getMessage(mailboxId: string, messageId: string): Promise<StoredMessage | undefined>;
   saveMessageAnalysis(
     messageId: string,
@@ -269,6 +285,7 @@ type MessageRow = {
   ai_model: string | null;
   ai_analysis_schema_version: number;
   ai_base_sync_status: AiBaseSyncStatus;
+  reply_aggregate_sync_status: ReplyAggregateSyncStatus;
   send_status: SendStatus;
   sent_at: Date | null;
   sent_message_id: string | null;
@@ -302,6 +319,7 @@ function messageFromRow(row: MessageRow): StoredMessage {
     ...(row.ai_model ? { aiModel: row.ai_model } : {}),
     aiAnalysisSchemaVersion: row.ai_analysis_schema_version ?? 1,
     aiBaseSyncStatus: row.ai_base_sync_status,
+    replyAggregateSyncStatus: row.reply_aggregate_sync_status,
     sendStatus: row.send_status,
     ...(row.sent_at ? { sentAt: row.sent_at } : {}),
     ...(row.sent_message_id ? { sentMessageId: row.sent_message_id } : {}),
@@ -435,6 +453,24 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS ai_model VARCHAR(100),
         ADD COLUMN IF NOT EXISTS ai_analysis_schema_version INTEGER NOT NULL DEFAULT 1,
         ADD COLUMN IF NOT EXISTS ai_base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    `);
+    await this.pool.query(`
+      ALTER TABLE email_messages
+        ADD COLUMN IF NOT EXISTS reply_aggregate_sync_status VARCHAR(20)
+          NOT NULL DEFAULT 'pending'
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS creator_reply_events (
+        message_id UUID PRIMARY KEY REFERENCES email_messages(id) ON DELETE CASCADE,
+        record_id VARCHAR(128) NOT NULL,
+        received_at TIMESTAMPTZ,
+        detail_line TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS creator_reply_events_record_time_idx
+      ON creator_reply_events (record_id, received_at, message_id)
     `);
     await this.pool.query(`
       ALTER TABLE email_messages
@@ -715,7 +751,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
               ai_analysis_schema_version,
-              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              ai_base_sync_status, reply_aggregate_sync_status,
+              send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
@@ -736,7 +773,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
               ai_analysis_schema_version,
-              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              ai_base_sync_status, reply_aggregate_sync_status,
+              send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1 AND id = $2`,
@@ -915,7 +953,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
               ai_analysis_schema_version,
-              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              ai_base_sync_status, reply_aggregate_sync_status,
+              send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1
@@ -923,6 +962,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
               OR (classification = 'creator_reply'
                   AND (match_status <> 'matched'
                        OR base_sync_status <> 'synced'
+                       OR reply_aggregate_sync_status <> 'synced'
                        OR ai_analysis_status IN ('pending', 'skipped')
                        OR ai_analysis_schema_version < 2
                        OR (ai_analysis_status = 'failed'
@@ -951,7 +991,8 @@ export class PostgresMailboxRepository implements MailboxRepository {
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
               ai_analysis_schema_version,
-              ai_base_sync_status, send_status, sent_at, sent_message_id,
+              ai_base_sync_status, reply_aggregate_sync_status,
+              send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
        FROM email_messages
        WHERE mailbox_id = $1 AND uid_validity = $2
@@ -1028,6 +1069,79 @@ export class PostgresMailboxRepository implements MailboxRepository {
     await this.pool.query(
       "UPDATE email_messages SET unmatched_record_id = $2 WHERE id = $1",
       [messageId, recordId]
+    );
+  }
+
+  async recordCreatorReplyEvent(input: {
+    messageId: string;
+    recordId: string;
+    receivedAt?: Date;
+    detailLine: string;
+  }): Promise<CreatorReplyAggregate> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO creator_reply_events
+           (message_id, record_id, received_at, detail_line)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (message_id) DO UPDATE
+         SET record_id = EXCLUDED.record_id,
+             received_at = EXCLUDED.received_at,
+             detail_line = EXCLUDED.detail_line,
+             updated_at = NOW()`,
+        [
+          input.messageId,
+          input.recordId,
+          input.receivedAt ?? null,
+          input.detailLine
+        ]
+      );
+      const summary = await client.query<{
+        count: string;
+        first_received_at: Date | null;
+        latest_received_at: Date | null;
+      }>(
+        `SELECT COUNT(*)::text AS count,
+                MIN(received_at) AS first_received_at,
+                MAX(received_at) AS latest_received_at
+         FROM creator_reply_events
+         WHERE record_id = $1`,
+        [input.recordId]
+      );
+      const details = await client.query<{ detail_line: string }>(
+        `SELECT detail_line
+         FROM creator_reply_events
+         WHERE record_id = $1
+         ORDER BY received_at ASC NULLS LAST, message_id ASC`,
+        [input.recordId]
+      );
+      await client.query("COMMIT");
+      const row = summary.rows[0];
+      return {
+        count: Number.parseInt(row?.count ?? "0", 10),
+        ...(row?.first_received_at
+          ? { firstReceivedAt: row.first_received_at }
+          : {}),
+        ...(row?.latest_received_at
+          ? { latestReceivedAt: row.latest_received_at }
+          : {}),
+        detailLines: details.rows.map((item) => item.detail_line)
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markMessageReplyAggregateSynced(messageId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE email_messages
+       SET reply_aggregate_sync_status = 'synced'
+       WHERE id = $1`,
+      [messageId]
     );
   }
 
