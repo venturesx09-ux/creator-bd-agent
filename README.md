@@ -1,4 +1,4 @@
-# Creator BD Agent — Phase 5.4.1
+# Creator BD Agent — Phase 5.4.2
 
 这是Creator BD Agent的“邮件分析与飞书写回工作台”。当前版本保留IMAP只读同步、飞书匹配和AI分析，并暂停旧的回复草稿与邮件发送界面：
 

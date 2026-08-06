@@ -83,7 +83,7 @@ describe("health and authentication", () => {
     const response = await request(app).get("/health").expect(200);
 
     assert.equal(response.body.status, "ok");
-    assert.equal(response.body.version, "5.4.1");
+    assert.equal(response.body.version, "5.4.2");
     assert.equal(response.body.configuration.unmatchedTableConfigured, false);
     const serialized = JSON.stringify(response.body);
     assert.equal(serialized.includes(config.feishu.appSecret), false);
@@ -228,6 +228,10 @@ describe("mailbox admin", () => {
     assert.match(ADMIN_JS, /sessionStorage/u);
     assert.doesNotMatch(ADMIN_JS, /重新分析|正在调用AI分析/u);
     assert.match(ADMIN_JS, /系统正在自动生成中文摘要和报价/u);
+    assert.match(ADMIN_JS, /已匹配飞书/u);
+    assert.match(ADMIN_JS, /等待匹配/u);
+    assert.match(ADMIN_JS, /无需匹配/u);
+    assert.match(response.text, /message-filters/u);
     assert.doesNotThrow(() => new Function(ADMIN_JS));
   });
 

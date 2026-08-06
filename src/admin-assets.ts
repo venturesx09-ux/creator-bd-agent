@@ -113,6 +113,7 @@ export const ADMIN_HTML = `<!doctype html>
           <div><h2 id="message-title">最近邮件</h2><p class="muted">左侧查看原邮件，右侧只显示中文摘要。</p></div>
           <div class="heading-actions"><button id="refresh-messages" class="secondary" type="button">刷新邮件</button><button id="close-messages" class="secondary" type="button">关闭</button></div>
         </div>
+        <div id="message-filters" class="message-filters" aria-label="邮件匹配状态筛选"></div>
         <div id="message-list" class="messages"></div>
       </section>
     </section>
@@ -125,7 +126,7 @@ export const ADMIN_HTML = `<!doctype html>
 
 export const ADMIN_CSS = `:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#171717;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}main{width:min(1040px,calc(100% - 32px));margin:40px auto 80px}header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}h1{font-size:38px;letter-spacing:-.04em;margin:4px 0 8px}h2{font-size:20px;margin:0 0 8px}.eyebrow{font-size:12px;letter-spacing:.18em;font-weight:700;margin:0}.muted{color:#696969;margin:0;line-height:1.55}.badge{font-size:11px;font-weight:700;letter-spacing:.12em;background:#181818;color:white;padding:8px 12px;border-radius:999px}.badge.light{background:#edf8f0;color:#147a39}.panel{background:#fff;border:1px solid #e6e6e1;border-radius:18px;padding:24px;margin-bottom:18px;box-shadow:0 10px 30px rgba(0,0,0,.035)}.row,.section-heading,.heading-actions,.progress-line{display:flex;gap:12px;align-items:center}.section-heading,.progress-line{justify-content:space-between}.section-heading{margin-bottom:18px}.heading-actions{flex-wrap:wrap;justify-content:flex-end}.row{margin-top:16px}.row input{flex:1}.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.summary-item{background:#f7f7f4;border-radius:12px;padding:14px}.summary-value{font-size:26px;font-weight:750;display:block}.summary-label{font-size:12px;color:#696969}.progress-panel{background:#f7f7f4;border:1px solid #e8e8e3;border-radius:12px;padding:14px;margin-bottom:16px}.progress-panel.always-visible{margin-bottom:12px}.progress-panel progress{width:100%;height:12px;margin:10px 0 6px;accent-color:#147a39}.progress-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}.progress-stats div{background:#f7f7f4;border-radius:10px;padding:12px}.progress-stats strong{display:block;font-size:22px}.progress-stats span{font-size:11px;color:#696969}.progress-updated{margin-top:12px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin:18px 0}label{display:grid;gap:7px;font-size:13px;font-weight:650}input,select,button{font:inherit;border-radius:10px}input,select{width:100%;border:1px solid #d8d8d2;padding:11px 12px;background:white}input:focus,select:focus{outline:2px solid #171717;outline-offset:1px}button{border:1px solid #171717;background:#171717;color:white;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button.secondary{background:white;color:#171717;border-color:#d8d8d2}button.danger{color:#b42318;border-color:#efc7c3}.cards{display:grid;gap:12px}.mailbox{border:1px solid #e8e8e3;border-radius:14px;padding:16px}.mailbox.disabled{opacity:.65;background:#fafaf8}.mailbox-top{display:flex;justify-content:space-between;gap:16px}.mailbox h3{margin:0 0 5px;font-size:16px}.meta{font-size:13px;color:#676767;line-height:1.6}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.actions button{font-size:13px;padding:8px 11px}.state{font-size:12px;font-weight:700}.state.success{color:#147a39}.state.failed,.state.disabled{color:#b42318}.messages{display:grid;gap:10px}.message{border-top:1px solid #ecece7;padding-top:14px}.message:first-child{border-top:0}.message h3{font-size:15px;margin:0 0 6px}.message p{font-size:13px;color:#555;white-space:pre-wrap;margin:4px 0;line-height:1.5}.pill{display:inline-block;font-size:11px;font-weight:700;background:#f0f0eb;border-radius:999px;padding:5px 8px;margin:2px 6px 5px 0}#status{position:fixed;right:20px;bottom:20px;max-width:420px;background:#171717;color:#fff;border-radius:12px;padding:12px 16px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#status.show{opacity:1;transform:none}#status.error{background:#a32119}@media(max-width:700px){main{margin-top:24px}.grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.progress-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.row,.section-heading{align-items:stretch;flex-direction:column}.row button{width:100%}.heading-actions{justify-content:flex-start}header{gap:16px}h1{font-size:32px}.panel{padding:18px}}`;
 
-export const ADMIN_CSS_EXTRA = `main{width:min(1180px,calc(100% - 32px))}.messages{gap:14px}.message{border:1px solid #e8e8e3;border-radius:14px;padding:17px;background:#fff}.message:first-child{border-top:1px solid #e8e8e3}.message h3{font-size:16px}.message h4{font-size:13px;margin:0 0 10px}.message-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}.message-column{background:#f7f7f4;border-radius:12px;padding:14px;min-width:0}.message-column.ai{background:#f3f7ff;border:1px solid #dae5fb}.message-body{max-height:300px;overflow:auto}.analysis-row{border-top:1px solid rgba(0,0,0,.08);padding-top:8px;margin-top:8px}.analysis-row strong{display:block;font-size:11px;color:#6b6b6b;margin-bottom:3px}.draft{background:#fff;border-radius:9px;padding:10px;border:1px solid #dce5f5;max-height:320px;overflow:auto}.pill.success{background:#eaf7ee;color:#147a39}.pill.failed{background:#fff0ef;color:#a32119}.pill.pending{background:#fff7df;color:#835f00}@media(max-width:760px){.message-columns{grid-template-columns:1fr}}`;
+export const ADMIN_CSS_EXTRA = `main{width:min(1180px,calc(100% - 32px))}.message-filters{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 16px}.message-filters button{font-size:12px;padding:8px 11px}.message-filters button.active{background:#171717;color:#fff;border-color:#171717}.messages{gap:14px}.message{border:1px solid #e8e8e3;border-radius:14px;padding:17px;background:#fff}.message:first-child{border-top:1px solid #e8e8e3}.message h3{font-size:16px}.message h4{font-size:13px;margin:0 0 10px}.message-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}.message-column{background:#f7f7f4;border-radius:12px;padding:14px;min-width:0}.message-column.ai{background:#f3f7ff;border:1px solid #dae5fb}.message-body{max-height:300px;overflow:auto}.analysis-row{border-top:1px solid rgba(0,0,0,.08);padding-top:8px;margin-top:8px}.analysis-row strong{display:block;font-size:11px;color:#6b6b6b;margin-bottom:3px}.draft{background:#fff;border-radius:9px;padding:10px;border:1px solid #dce5f5;max-height:320px;overflow:auto}.pill.success{background:#eaf7ee;color:#147a39}.pill.failed{background:#fff0ef;color:#a32119}.pill.pending{background:#fff7df;color:#835f00}@media(max-width:760px){.message-columns{grid-template-columns:1fr}}`;
 
 export const ADMIN_CSS_DRAFT = `.draft-editor{border-top:1px solid rgba(0,0,0,.08);margin-top:10px;padding-top:10px}.draft-editor label{margin-top:9px}.draft-editor textarea,#smtp-form textarea{width:100%;min-height:140px;resize:vertical;border:1px solid #cfd9ed;border-radius:9px;padding:10px;background:#fff;font:inherit;font-size:13px;line-height:1.55}.draft-editor textarea:focus,#smtp-form textarea:focus{outline:2px solid #365fba;outline-offset:1px}.draft-editor .actions{margin-top:10px}.checkbox-row{display:flex;align-items:center;align-self:end;gap:9px;padding:11px 0}.checkbox-row input{width:auto}.smtp-ready{color:#147a39}.smtp-warning{color:#9a6700}.send-warning{background:#fff7df;border:1px solid #f0d785;border-radius:9px;padding:10px;margin-top:10px!important}.actions button.send-confirm{background:#a32119;color:#fff;border-color:#a32119}`;
 
@@ -134,6 +135,8 @@ export const ADMIN_JS = `(() => {
   let adminToken = window.sessionStorage.getItem(tokenStorageKey) || '';
   let currentMailboxes = [];
   let currentMessageMailbox = null;
+  let currentMessages = [];
+  let currentMessageFilter = 'all';
   let progressTimer = null;
   let progressRequestRunning = false;
   let lastProgressStatus = 'idle';
@@ -361,6 +364,9 @@ export const ADMIN_JS = `(() => {
 
   async function loadMessages(mailboxId, label) {
     const result = await api('/api/admin/mailboxes/' + mailboxId + '/messages?limit=100');
+    if (!currentMessageMailbox || currentMessageMailbox.id !== mailboxId) {
+      currentMessageFilter = 'all';
+    }
     currentMessageMailbox = { id: mailboxId, label: label };
     showMessages(mailboxId, label, result.messages);
   }
@@ -462,12 +468,58 @@ export const ADMIN_JS = `(() => {
     parent.append(row);
   }
 
-  function showMessages(mailboxId, label, messages) {
-    byId('message-title').textContent = label + ' · 最近邮件';
+  const messageFilterDefinitions = [
+    { key: 'all', label: '全部' },
+    { key: 'matched', label: '已匹配飞书' },
+    { key: 'waiting', label: '等待匹配' },
+    { key: 'not_required', label: '无需匹配' }
+  ];
+
+  function messageMatchesFilter(message, filter) {
+    const needsCreatorMatch = message.classification === 'creator_reply';
+    if (filter === 'matched') return needsCreatorMatch && message.matchStatus === 'matched';
+    if (filter === 'waiting') return needsCreatorMatch && message.matchStatus !== 'matched';
+    if (filter === 'not_required') return !needsCreatorMatch;
+    return true;
+  }
+
+  function renderMessageFilters() {
+    const filters = byId('message-filters');
+    filters.replaceChildren();
+    messageFilterDefinitions.forEach((definition) => {
+      const count = currentMessages.filter((message) =>
+        messageMatchesFilter(message, definition.key)
+      ).length;
+      const filterButton = element(
+        'button',
+        definition.label + ' ' + count,
+        'secondary message-filter' +
+          (currentMessageFilter === definition.key ? ' active' : '')
+      );
+      filterButton.type = 'button';
+      filterButton.setAttribute(
+        'aria-pressed',
+        currentMessageFilter === definition.key ? 'true' : 'false'
+      );
+      filterButton.addEventListener('click', () => {
+        currentMessageFilter = definition.key;
+        renderMessageFilters();
+        renderMessageList();
+      });
+      filters.append(filterButton);
+    });
+  }
+
+  function renderMessageList() {
     const list = byId('message-list');
     list.replaceChildren();
-    if (!messages.length) list.append(element('p', '暂无已同步邮件。', 'muted'));
-    messages.forEach((message) => {
+    const visibleMessages = currentMessages.filter((message) =>
+      messageMatchesFilter(message, currentMessageFilter)
+    );
+    if (!visibleMessages.length) {
+      list.append(element('p', currentMessages.length ? '当前分类暂无邮件。' : '暂无已同步邮件。', 'muted'));
+    }
+    visibleMessages.forEach((message) => {
       const card = element('article', undefined, 'message');
       card.append(element('h3', message.subject || '(无主题)'));
       card.append(element('span', classificationLabels[message.classification] || '未知', 'pill'));
@@ -503,6 +555,13 @@ export const ADMIN_JS = `(() => {
       card.append(columns);
       list.append(card);
     });
+  }
+
+  function showMessages(mailboxId, label, messages) {
+    byId('message-title').textContent = label + ' · 最近邮件';
+    currentMessages = messages;
+    renderMessageFilters();
+    renderMessageList();
     byId('message-panel').hidden = false;
     byId('message-panel').scrollIntoView({ behavior: 'smooth' });
   }
