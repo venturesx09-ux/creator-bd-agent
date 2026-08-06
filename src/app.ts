@@ -30,6 +30,8 @@ import {
   type MailboxServiceLike
 } from "./mailbox-service.js";
 
+const APP_VERSION = "5.4.0";
+
 type Logger = Pick<Console, "info" | "error">;
 type RequestWithRawBody = Request & { rawBody?: Buffer };
 
@@ -144,7 +146,7 @@ export function createApp(options: CreateAppOptions): express.Express {
     response.status(200).json({
       status: "ok",
       service: "creator-bd-agent",
-      version: "5.0.0",
+      version: APP_VERSION,
       timestamp: new Date().toISOString(),
       configuration: configurationStatus(config)
     });

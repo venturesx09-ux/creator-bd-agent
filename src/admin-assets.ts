@@ -425,6 +425,7 @@ export const ADMIN_JS = `(() => {
 
   const matchReasonLabels = {
     email_exact: '通过发件邮箱匹配',
+    sender_local_part: '通过发件邮箱用户名匹配',
     subject_creator_id: '通过邮件标题 @达人ID 匹配',
     history_creator_id: '通过历史达人ID匹配',
     history_creator_id_missing: '标题和历史邮件中未找到达人ID',

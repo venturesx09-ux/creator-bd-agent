@@ -13,6 +13,14 @@ import type { CreatorMatcher, MessageSummary } from "./mailbox-service.js";
 
 const EMAIL_PATTERN_SOURCE = "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}";
 const INDEX_FRESHNESS_MS = 30 * 60_000;
+const MISS_REFRESH_INTERVAL_MS = 5 * 60_000;
+const CREATOR_ID_FIELD_PATTERN = /(?:达人.*(?:id|账号)|(?:creator|influencer).*(?:id|handle|account)|(?:^|[^a-z])handle|社媒账号)/iu;
+const GENERIC_EMAIL_LOCAL_PARTS = new Set([
+  "admin", "agent", "booking", "business", "collab", "collaboration", "contact",
+  "hello", "hi", "info", "inquiries", "inquiry", "mail", "management",
+  "manager", "marketing", "office", "partnerships", "support", "team"
+]);
+const RESERVED_CREATOR_IDS = new Set(["http", "https", "www"]);
 
 function valueHash(value: string): string {
   return createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
@@ -34,9 +42,37 @@ export function normalizeCreatorId(value: string): string | undefined {
     : undefined;
 }
 
+export function extractCreatorIdsFromBaseText(value: string): string[] {
+  const output = new Set<string>();
+  const add = (candidate: string): void => {
+    const normalized = normalizeCreatorId(candidate);
+    if (normalized && !RESERVED_CREATOR_IDS.has(normalized)) {
+      output.add(normalized);
+    }
+  };
+  add(value);
+  for (const part of value.split(/[,，;；|\n\r]+/u)) add(part);
+  for (const match of value.matchAll(
+    /(?:instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com)\/(?:@)?([\p{L}\p{N}._-]{1,100})/giu
+  )) {
+    add(match[1] ?? "");
+  }
+  for (const match of value.matchAll(
+    /(?:达人(?:id|账号)|creator(?:\s+id)?|influencer(?:\s+id)?|handle|instagram|tiktok|ig)\s*[:：=]\s*@?([\p{L}\p{N}._-]{1,100})/giu
+  )) {
+    add(match[1] ?? "");
+  }
+  for (const match of value.matchAll(
+    /(?:^|[^\p{L}\p{N}._%+-])@([\p{L}\p{N}._-]{1,100})/gu
+  )) {
+    add(match[1] ?? "");
+  }
+  return [...output];
+}
+
 export function extractHistoricalCreatorIds(text: string): string[] {
   const output = new Set<string>();
-  const pattern = /(?:^|\n)\s*(?:>+\s*)?hi\s+(@?[\p{L}\p{N}._-]{1,100})\s*[,，!！]/giu;
+  const pattern = /(?:^|\n)\s*(?:>+\s*)?(?:hi|hello|hey|dear)\s+(@?[\p{L}\p{N}._-]{1,100})\s*[,，!！]/giu;
   for (const match of text.matchAll(pattern)) {
     const normalized = normalizeCreatorId(match[1] ?? "");
     if (normalized) output.add(normalized);
@@ -114,9 +150,12 @@ function persistentCreatorIdEntries(
   const grouped = new Map<string, FeishuBaseRecord[]>();
   for (const record of records) {
     const creatorIds = new Set(
-      textValues(record.fields["达人ID"])
-        .map((value) => normalizeCreatorId(value))
-        .filter((value): value is string => Boolean(value))
+      Object.entries(record.fields)
+        .filter(([fieldName]) =>
+          fieldName === "达人ID" || CREATOR_ID_FIELD_PATTERN.test(fieldName)
+        )
+        .flatMap(([, fieldValue]) => textValues(fieldValue))
+        .flatMap((value) => extractCreatorIdsFromBaseText(value))
     );
     for (const creatorId of creatorIds) {
       const existing = grouped.get(creatorId) ?? [];
@@ -194,12 +233,24 @@ function classificationLabel(value: MessageSummary["classification"]): string {
 function unmatchedReasonLabel(value: MatchReason): string {
   return {
     email_exact: "需要人工判断",
+    sender_local_part: "需要人工判断",
     subject_creator_id: "需要人工判断",
     history_creator_id: "需要人工判断",
     history_creator_id_missing: "标题和历史邮件中未找到达人ID",
     creator_id_not_found: "标题或历史达人ID在飞书中不存在",
     creator_id_ambiguous: "达人ID重复"
   }[value];
+}
+
+function senderLocalCreatorIds(message: MessageSummary): string[] {
+  const output = new Set<string>();
+  for (const email of message.fromAddresses) {
+    const localPart = email.split("@", 1)[0]?.toLowerCase();
+    if (!localPart || GENERIC_EMAIL_LOCAL_PARTS.has(localPart)) continue;
+    const normalized = normalizeCreatorId(localPart);
+    if (normalized) output.add(normalized);
+  }
+  return [...output];
 }
 
 function unmatchedFieldsForMessage(
@@ -337,6 +388,21 @@ function resolveMessageRecord(
     .find(Boolean);
   if (emailRecord) return { record: emailRecord, reason: "email_exact" };
 
+  const senderCreatorIds = senderLocalCreatorIds(message);
+  const senderResolution = resolveCreatorIds(senderCreatorIds, indexes);
+  if (senderResolution.record) {
+    return {
+      record: senderResolution.record,
+      reason: "sender_local_part",
+      ...(senderResolution.creatorId
+        ? { creatorId: senderResolution.creatorId }
+        : {})
+    };
+  }
+  if (senderResolution.ambiguous) {
+    return { reason: "creator_id_ambiguous" };
+  }
+
   const subjectCreatorIds = extractSubjectCreatorIds(message.subject);
   const subjectResolution = resolveCreatorIds(subjectCreatorIds, indexes);
   if (subjectResolution.record) {
@@ -355,7 +421,7 @@ function resolveMessageRecord(
   const creatorIds = extractHistoricalCreatorIds(message.textPreview);
   if (!creatorIds.length) {
     return {
-      reason: subjectCreatorIds.length
+      reason: subjectCreatorIds.length || senderCreatorIds.length
         ? "creator_id_not_found"
         : "history_creator_id_missing"
     };
@@ -410,6 +476,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
     | { value: CreatorIndexes; expiresAt: number }
     | undefined;
   private indexRequest: Promise<CreatorIndexes> | undefined;
+  private lastFullIndexRefreshAt = 0;
 
   constructor(
     private readonly feishuClient: FeishuClient,
@@ -439,7 +506,15 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
     );
     for (const message of orderedMessages) {
       try {
-        const resolution = resolveMessageRecord(message, indexes);
+        let resolution = resolveMessageRecord(message, indexes);
+        if (
+          !resolution.record &&
+          resolution.reason !== "creator_id_ambiguous" &&
+          Date.now() - this.lastFullIndexRefreshAt >= MISS_REFRESH_INTERVAL_MS
+        ) {
+          indexes = await this.forceRefreshIndexAfterMiss();
+          resolution = resolveMessageRecord(message, indexes);
+        }
         const matchedRecord = resolution.record;
         if (matchedRecord) {
           let aggregateFields: Record<string, unknown> = {};
@@ -576,6 +651,14 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
     return { status: "started" };
   }
 
+  private async forceRefreshIndexAfterMiss(): Promise<CreatorIndexes> {
+    if (this.indexRequest) return this.indexRequest;
+    this.indexRequest = this.refreshIndex("refreshing").finally(() => {
+      this.indexRequest = undefined;
+    });
+    return this.indexRequest;
+  }
+
   private async getIndexes(): Promise<CreatorIndexes> {
     const now = Date.now();
     if (this.cachedIndex && this.cachedIndex.expiresAt > now) {
@@ -641,6 +724,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
       creatorIds: creatorIdIndexFromPersistentEntries(creatorIdEntries)
     };
     this.cachedIndex = { value, expiresAt: Date.now() + INDEX_FRESHNESS_MS };
+    this.lastFullIndexRefreshAt = Date.now();
     this.progress.indexReady(records.length, "feishu");
     return value;
   }

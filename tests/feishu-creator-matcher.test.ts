@@ -4,6 +4,7 @@ import type { MailboxRepository, MatchStatus } from "../src/database.js";
 import {
   baseFieldsForMessage,
   buildCreatorEmailIndex,
+  extractCreatorIdsFromBaseText,
   extractHistoricalCreatorIds,
   extractSubjectCreatorIds,
   FeishuCreatorMatcher,
@@ -24,6 +25,15 @@ describe("Feishu creator matching", () => {
     }]);
     assert.equal(index.get("creator@example.com"), "rec_1");
     assert.equal(index.get("other@example.com"), "rec_1");
+  });
+
+  it("normalizes creator IDs stored as social links or labeled handles", () => {
+    assert.deepEqual(
+      extractCreatorIdsFromBaseText(
+        "Instagram: https://www.instagram.com/BigSacPrints/\nIG: @backup.handle"
+      ),
+      ["bigsacprints", "backup.handle"]
+    );
   });
 
   it("stores matched and unmatched results", async () => {
@@ -201,6 +211,71 @@ describe("Feishu creator matching", () => {
       status: "matched", recordId: "rec_history", reason: "history_creator_id"
     }]);
     assert.equal(baseUpdates[0]?.["最近发件邮箱"], "manager@agency.com");
+  });
+
+  it("matches the BigSacPrints reply after refreshing and trying safe ID forms", async () => {
+    const updates: Array<{ status: MatchStatus; recordId?: string; reason?: string }> = [];
+    let indexRefreshes = 0;
+    const repository = {
+      loadFeishuEmailIndex: async () => ({
+        entries: [{
+          emailHash: "0".repeat(64), recordId: "rec_old",
+          cooperationStage: "", lastContactAt: 0
+        }],
+        refreshedAt: new Date()
+      }),
+      replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [{
+        creatorIdHash: "1".repeat(64), recordId: "rec_old",
+        ambiguous: false, cooperationStage: ""
+      }],
+      replaceFeishuCreatorIdIndex: async () => undefined,
+      updateFeishuIndexRecord: async () => undefined,
+      updateMessageMatch: async (
+        _id: string,
+        status: MatchStatus,
+        recordId?: string,
+        reason?: string
+      ) => updates.push({
+        status,
+        ...(recordId ? { recordId } : {}),
+        ...(reason ? { reason } : {})
+      }),
+      getUnmatchedRecordId: async () => undefined,
+      setUnmatchedRecordId: async () => undefined
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      listAllBaseRecords: async () => {
+        indexRefreshes += 1;
+        return [{
+          record_id: "rec_bigsacprints",
+          fields: {
+            "达人账号": "Instagram: https://instagram.com/BigSacPrints/",
+            "合作阶段": "已触达"
+          }
+        }];
+      },
+      updateBaseRecord: async () => undefined,
+      isUnmatchedTableConfigured: () => false
+    } as unknown as FeishuClient;
+
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
+      id: "bigsac-message", uid: 15,
+      subject: "Re: Paid Creator Partnership with Tripo: Making 3D Creation More Accessible",
+      from: ["Isaac Manning <bigsacprints@gmail.com>"],
+      fromAddresses: ["bigsacprints@gmail.com"], to: [], messageId: "m15",
+      references: [],
+      textPreview: "Hi Shark!\nThanks.\n\n> Hi bigsacprints,\n> Hope you’re doing well.",
+      classification: "creator_reply", matchStatus: "unmatched",
+      receivedAt: "2026-08-05T17:43:45.000Z"
+    }]);
+
+    assert.equal(indexRefreshes, 1);
+    assert.deepEqual(updates, [{
+      status: "matched",
+      recordId: "rec_bigsacprints",
+      reason: "sender_local_part"
+    }]);
   });
 
   it("creates one unmatched queue row and stores its Feishu record ID", async () => {
