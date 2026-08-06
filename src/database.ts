@@ -59,6 +59,7 @@ export type SentCopyStatus = "not_required" | "pending" | "saved" | "failed";
 export type SendFeishuSyncStatus = "not_required" | "pending" | "synced";
 export type MatchReason =
   | "email_exact"
+  | "reply_social_profile"
   | "sender_local_part"
   | "subject_creator_id"
   | "history_creator_id"

@@ -6,6 +6,7 @@ import {
   buildCreatorEmailIndex,
   extractCreatorIdsFromBaseText,
   extractHistoricalCreatorIds,
+  extractReplySocialCreatorIds,
   extractSubjectCreatorIds,
   FeishuCreatorMatcher,
   replyAggregateFields,
@@ -33,6 +34,17 @@ describe("Feishu creator matching", () => {
         "Instagram: https://www.instagram.com/BigSacPrints/\nIG: @backup.handle"
       ),
       ["bigsacprints", "backup.handle"]
+    );
+  });
+
+  it("uses social profiles only from the current reply, not quoted history", () => {
+    assert.deepEqual(
+      extractReplySocialCreatorIds(
+        "Best regards,\nInstagram <https://www.instagram.com/elli_ugccreator/>\n" +
+        "\nOn Wed, Aug 5, 2026 at 8:21 PM Shark wrote:\n" +
+        "> https://instagram.com/tripo_official/"
+      ),
+      ["elli_ugccreator"]
     );
   });
 
@@ -211,6 +223,58 @@ describe("Feishu creator matching", () => {
       status: "matched", recordId: "rec_history", reason: "history_creator_id"
     }]);
     assert.equal(baseUpdates[0]?.["最近发件邮箱"], "manager@agency.com");
+  });
+
+  it("matches Elli from her current-reply Instagram signature before a conflicting old greeting", async () => {
+    const updates: Array<{ status: MatchStatus; recordId?: string; reason?: string }> = [];
+    const repository = {
+      loadFeishuEmailIndex: async () => ({ entries: [] }),
+      replaceFeishuEmailIndex: async () => undefined,
+      loadFeishuCreatorIdIndex: async () => [],
+      replaceFeishuCreatorIdIndex: async () => undefined,
+      updateFeishuIndexRecord: async () => undefined,
+      updateMessageMatch: async (
+        _id: string,
+        status: MatchStatus,
+        recordId?: string,
+        reason?: string
+      ) => updates.push({
+        status,
+        ...(recordId ? { recordId } : {}),
+        ...(reason ? { reason } : {})
+      }),
+      getUnmatchedRecordId: async () => undefined,
+      setUnmatchedRecordId: async () => undefined
+    } as unknown as MailboxRepository;
+    const feishuClient = {
+      listAllBaseRecords: async () => [{
+        record_id: "rec_elli",
+        fields: { "达人ID": "elli_ugccreator", "合作阶段": "已触达" }
+      }],
+      updateBaseRecord: async () => undefined,
+      isUnmatchedTableConfigured: () => false
+    } as unknown as FeishuClient;
+
+    await new FeishuCreatorMatcher(feishuClient, repository).matchMessages([{
+      id: "elli-message", uid: 16,
+      subject: "Re: Paid Creator Partnership with Tripo",
+      from: ["Elli Aptsiauri_UGC <eliaptsiauriugc@gmail.com>"],
+      fromAddresses: ["eliaptsiauriugc@gmail.com"], to: [], messageId: "m16",
+      references: [],
+      textPreview:
+        "Hi darling,\nMy rate is $2000.\nBest regards, Elli\n" +
+        "Instagram <https://www.instagram.com/elli_ugccreator/>\n\n" +
+        "On Wed, Aug 5, 2026 at 8:21 PM Shark wrote:\n" +
+        "> Hi ewelina_czarnecka,\n> Hope you’re doing well.",
+      classification: "creator_reply", matchStatus: "unmatched",
+      receivedAt: "2026-08-05T19:33:16.000Z"
+    }]);
+
+    assert.deepEqual(updates, [{
+      status: "matched",
+      recordId: "rec_elli",
+      reason: "reply_social_profile"
+    }]);
   });
 
   it("matches the BigSacPrints reply after refreshing and trying safe ID forms", async () => {

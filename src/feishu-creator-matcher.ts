@@ -21,6 +21,9 @@ const GENERIC_EMAIL_LOCAL_PARTS = new Set([
   "manager", "marketing", "office", "partnerships", "support", "team"
 ]);
 const RESERVED_CREATOR_IDS = new Set(["http", "https", "www"]);
+const RESERVED_SOCIAL_PATHS = new Set([
+  "explore", "p", "reel", "reels", "shorts", "stories", "watch"
+]);
 
 function valueHash(value: string): string {
   return createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
@@ -66,6 +69,36 @@ export function extractCreatorIdsFromBaseText(value: string): string[] {
     /(?:^|[^\p{L}\p{N}._%+-])@([\p{L}\p{N}._-]{1,100})/gu
   )) {
     add(match[1] ?? "");
+  }
+  return [...output];
+}
+
+function currentReplySection(text: string): string {
+  const separators = [
+    /\nOn [^\n]{1,500}wrote:\s*(?:\n|$)/iu,
+    /\n-{2,}\s*(?:Original Message|原始邮件)/iu,
+    /\nFrom:\s+[^\n]+/iu
+  ];
+  const indexes = separators
+    .map((pattern) => pattern.exec(text)?.index)
+    .filter((value): value is number => value !== undefined);
+  return indexes.length ? text.slice(0, Math.min(...indexes)) : text;
+}
+
+export function extractReplySocialCreatorIds(text: string): string[] {
+  const output = new Set<string>();
+  const currentReply = currentReplySection(text);
+  for (const match of currentReply.matchAll(
+    /(?:instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com)\/(?:@)?([\p{L}\p{N}._-]{1,100})/giu
+  )) {
+    const normalized = normalizeCreatorId(match[1] ?? "");
+    if (
+      normalized &&
+      !RESERVED_CREATOR_IDS.has(normalized) &&
+      !RESERVED_SOCIAL_PATHS.has(normalized)
+    ) {
+      output.add(normalized);
+    }
   }
   return [...output];
 }
@@ -233,6 +266,7 @@ function classificationLabel(value: MessageSummary["classification"]): string {
 function unmatchedReasonLabel(value: MatchReason): string {
   return {
     email_exact: "需要人工判断",
+    reply_social_profile: "需要人工判断",
     sender_local_part: "需要人工判断",
     subject_creator_id: "需要人工判断",
     history_creator_id: "需要人工判断",
@@ -388,6 +422,21 @@ function resolveMessageRecord(
     .find(Boolean);
   if (emailRecord) return { record: emailRecord, reason: "email_exact" };
 
+  const replySocialCreatorIds = extractReplySocialCreatorIds(message.textPreview);
+  const replySocialResolution = resolveCreatorIds(replySocialCreatorIds, indexes);
+  if (replySocialResolution.record) {
+    return {
+      record: replySocialResolution.record,
+      reason: "reply_social_profile",
+      ...(replySocialResolution.creatorId
+        ? { creatorId: replySocialResolution.creatorId }
+        : {})
+    };
+  }
+  if (replySocialResolution.ambiguous) {
+    return { reason: "creator_id_ambiguous" };
+  }
+
   const senderCreatorIds = senderLocalCreatorIds(message);
   const senderResolution = resolveCreatorIds(senderCreatorIds, indexes);
   if (senderResolution.record) {
@@ -421,7 +470,8 @@ function resolveMessageRecord(
   const creatorIds = extractHistoricalCreatorIds(message.textPreview);
   if (!creatorIds.length) {
     return {
-      reason: subjectCreatorIds.length || senderCreatorIds.length
+      reason: subjectCreatorIds.length || senderCreatorIds.length ||
+        replySocialCreatorIds.length
         ? "creator_id_not_found"
         : "history_creator_id_missing"
     };
