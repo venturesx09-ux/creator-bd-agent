@@ -1,6 +1,6 @@
 {
   "name": "creator-bd-agent",
-  "version": "5.4.2",
+  "version": "5.5.0",
   "private": true,
   "type": "module",
   "description": "Creator BD backend with IMAP sync, Feishu matching, automatic Chinese summaries, and quote extraction.",

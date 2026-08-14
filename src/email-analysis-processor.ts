@@ -33,21 +33,12 @@ export function quoteText(analysis: EmailAnalysis): string {
 }
 
 function analysisFields(analysis: EmailAnalysis): Record<string, unknown> {
-  const fields: Record<string, unknown> = {
+  return {
     "AI中文摘要": analysis.summaryZh,
-    "报价": quoteText(analysis)
+    "报价金额": analysis.quotedAmount,
+    "报价币种": analysis.currency,
+    "交付内容": analysis.deliverables.join("；")
   };
-  if (analysis.quotedAmount !== null) {
-    fields["报价金额"] = analysis.quotedAmount;
-  }
-  if (analysis.currency) fields["报价币种"] = analysis.currency;
-  if (analysis.deliverables.length) {
-    fields["交付内容"] = analysis.deliverables.join("；");
-  }
-  if (analysis.rightsRequests.length) {
-    fields["权益要求"] = analysis.rightsRequests.join("；");
-  }
-  return fields;
 }
 
 function unmatchedAnalysisFields(
@@ -108,15 +99,14 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
     throw new Error("REPLY_DRAFTS_DISABLED");
   }
 
-  async syncSentState(message: MessageSummary, sentAt: Date): Promise<void> {
+  async syncSentState(message: MessageSummary, _sentAt: Date): Promise<void> {
     if (!message.matchedRecordId) {
       message.sendFeishuSyncStatus = "not_required";
       return;
     }
     try {
       await this.feishuClient.updateBaseRecord(message.matchedRecordId, {
-        "邮件同步状态": "已发送",
-        "最后联系时间": sentAt.getTime()
+        "邮件同步状态": "已发送"
       });
       await this.repository.markMessageSendFeishuSynced(message.id);
       message.sendFeishuSyncStatus = "synced";

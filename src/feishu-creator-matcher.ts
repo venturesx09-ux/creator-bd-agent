@@ -166,15 +166,11 @@ function buildCreatorRecordIndex(
 }
 
 function persistentEntries(records: FeishuBaseRecord[]): FeishuEmailIndexEntry[] {
-  return [...buildCreatorRecordIndex(records)].map(([email, record]) => {
-    const lastContactAt = currentTimestamp(record.fields["最后联系时间"]);
-    return {
-      emailHash: valueHash(email),
-      recordId: record.record_id,
-      cooperationStage: currentStage(record.fields),
-      ...(lastContactAt !== undefined ? { lastContactAt } : {})
-    };
-  });
+  return [...buildCreatorRecordIndex(records)].map(([email, record]) => ({
+    emailHash: valueHash(email),
+    recordId: record.record_id,
+    cooperationStage: currentStage(record.fields)
+  }));
 }
 
 function persistentCreatorIdEntries(
@@ -185,7 +181,9 @@ function persistentCreatorIdEntries(
     const creatorIds = new Set(
       Object.entries(record.fields)
         .filter(([fieldName]) =>
-          fieldName === "达人ID" || CREATOR_ID_FIELD_PATTERN.test(fieldName)
+          fieldName.toLowerCase() === "达人id" ||
+          fieldName === "主页链接" ||
+          CREATOR_ID_FIELD_PATTERN.test(fieldName)
         )
         .flatMap(([, fieldValue]) => textValues(fieldValue))
         .flatMap((value) => extractCreatorIdsFromBaseText(value))
@@ -202,15 +200,11 @@ function persistentCreatorIdEntries(
     ).values()];
     const record = uniqueRecords[0];
     const ambiguous = uniqueRecords.length !== 1 || !record;
-    const lastContactAt = record
-      ? currentTimestamp(record.fields["最后联系时间"])
-      : undefined;
     return {
       creatorIdHash: valueHash(creatorId),
       ...(!ambiguous && record ? { recordId: record.record_id } : {}),
       ambiguous,
-      cooperationStage: record ? currentStage(record.fields) : "",
-      ...(lastContactAt !== undefined ? { lastContactAt } : {})
+      cooperationStage: record ? currentStage(record.fields) : ""
     };
   });
 }
@@ -223,10 +217,7 @@ function indexFromPersistentEntries(
     {
       record_id: entry.recordId,
       fields: {
-        "合作阶段": entry.cooperationStage,
-        ...(entry.lastContactAt !== undefined
-          ? { "最后联系时间": entry.lastContactAt }
-          : {})
+        "合作阶段": entry.cooperationStage
       }
     }
   ]));
@@ -242,10 +233,7 @@ function creatorIdIndexFromPersistentEntries(
       : {
           record_id: entry.recordId,
           fields: {
-            "合作阶段": entry.cooperationStage,
-            ...(entry.lastContactAt !== undefined
-              ? { "最后联系时间": entry.lastContactAt }
-              : {})
+            "合作阶段": entry.cooperationStage
           }
         }
   ]));
@@ -323,36 +311,21 @@ function currentStage(fields: Record<string, unknown>): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function currentTimestamp(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
-
 export function baseFieldsForMessage(
   message: MessageSummary,
-  record: FeishuBaseRecord
+  record: FeishuBaseRecord,
+  updateRecentSender = true
 ): Record<string, unknown> {
   const fields: Record<string, unknown> = {
     "邮件同步状态": "已同步",
     "邮件分类": classificationLabel(message.classification)
   };
-  const receivedAt = message.receivedAt
-    ? Date.parse(message.receivedAt)
-    : Number.NaN;
-  const storedTimestamp = currentTimestamp(record.fields["最后联系时间"]);
-  if (
-    Number.isFinite(receivedAt) &&
-    (storedTimestamp === undefined || receivedAt >= storedTimestamp)
-  ) {
-    fields["最后联系时间"] = receivedAt;
-    fields["最近发件邮箱"] = message.fromAddresses[0] ?? "";
+  if (updateRecentSender) {
+    fields["最近发件邮箱"] = (message.fromAddresses[0] ?? "")
+      .trim()
+      .toLowerCase();
   }
+  if (message.project) fields["项目"] = message.project;
   if (
     message.classification === "creator_reply" &&
     PRE_REPLY_STAGES.has(currentStage(record.fields))
@@ -396,12 +369,6 @@ export function replyAggregateFields(
   const fields: Record<string, unknown> = {
     "累计回复邮件数": aggregate.count
   };
-  if (aggregate.firstReceivedAt) {
-    fields["首次回复时间"] = aggregate.firstReceivedAt.getTime();
-  }
-  if (aggregate.latestReceivedAt) {
-    fields["最近回复时间"] = aggregate.latestReceivedAt.getTime();
-  }
   const allDetails = aggregate.detailLines.join("\n");
   fields["回复邮件明细"] = allDetails.length <= MAX_REPLY_DETAIL_CHARACTERS
     ? allDetails
@@ -568,6 +535,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
         const matchedRecord = resolution.record;
         if (matchedRecord) {
           let aggregateFields: Record<string, unknown> = {};
+          let updateRecentSender = true;
           if (this.repository.recordCreatorReplyEvent) {
             const receivedAt = message.receivedAt
               ? new Date(message.receivedAt)
@@ -581,9 +549,13 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
               detailLine: replyDetailLine(message)
             });
             aggregateFields = replyAggregateFields(aggregate);
+            if (receivedAt && aggregate.latestReceivedAt) {
+              updateRecentSender =
+                receivedAt.getTime() >= aggregate.latestReceivedAt.getTime();
+            }
           }
           const fields = {
-            ...baseFieldsForMessage(message, matchedRecord),
+            ...baseFieldsForMessage(message, matchedRecord, updateRecentSender),
             ...aggregateFields
           };
           await this.feishuClient.updateBaseRecord(
@@ -593,8 +565,7 @@ export class FeishuCreatorMatcher implements CreatorMatcher {
           Object.assign(matchedRecord.fields, fields);
           await this.repository.updateFeishuIndexRecord(
             matchedRecord.record_id,
-            currentStage(matchedRecord.fields),
-            currentTimestamp(matchedRecord.fields["最后联系时间"])
+            currentStage(matchedRecord.fields)
           );
           await this.repository.updateMessageMatch(
             message.id,

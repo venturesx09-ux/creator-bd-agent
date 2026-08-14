@@ -149,19 +149,20 @@ describe("AI email analysis", () => {
     assert.equal(writtenRecord, "rec123");
     assert.equal(writtenFields["AI中文摘要"], analysis.summaryZh);
     assert.equal("AI回复草稿" in writtenFields, false);
-    assert.equal(
-      writtenFields["报价"],
-      "报价原文：Our rate is USD 500.\n标准化报价：1条Instagram Reel总价：USD 500"
-    );
+    assert.equal("报价" in writtenFields, false);
+    assert.equal("权益要求" in writtenFields, false);
     assert.equal(writtenFields["报价金额"], 500);
     assert.equal(writtenFields["报价币种"], "USD");
     assert.equal(writtenFields["交付内容"], "1 Instagram Reel");
     assert.equal("合作阶段" in writtenFields, false);
+    assert.deepEqual(Object.keys(writtenFields).sort(), [
+      "AI中文摘要", "报价金额", "报价币种", "交付内容"
+    ].sort());
     assert.equal(synced, true);
     assert.equal(message.aiBaseSyncStatus, "synced");
   });
 
-  it("always writes a Chinese summary and an explicit no-quote placeholder", async () => {
+  it("always writes a Chinese summary and clears numeric quote fields when absent", async () => {
     const noQuoteAnalysis: EmailAnalysis = {
       ...analysis,
       replyType: "interested_without_quote",
@@ -206,9 +207,10 @@ describe("AI email analysis", () => {
     ).process(message);
 
     assert.equal(writtenFields["AI中文摘要"], noQuoteAnalysis.summaryZh);
-    assert.equal(writtenFields["报价"], "未提及报价");
-    assert.equal("报价金额" in writtenFields, false);
-    assert.equal("报价币种" in writtenFields, false);
+    assert.equal(writtenFields["报价金额"], null);
+    assert.equal(writtenFields["报价币种"], null);
+    assert.equal(writtenFields["交付内容"], "1 Instagram Reel");
+    assert.equal("报价" in writtenFields, false);
   });
 
   it("writes AI summary and quote into the unmatched-mail table", async () => {

@@ -91,6 +91,7 @@ describe("Feishu creator matching", () => {
       fields: {
         "邮件同步状态": "已同步",
         "邮件分类": "达人回复",
+        "最近发件邮箱": "creator@example.com",
         "合作阶段": "已回复"
       }
     }]);
@@ -314,7 +315,7 @@ describe("Feishu creator matching", () => {
         return [{
           record_id: "rec_bigsacprints",
           fields: {
-            "达人账号": "Instagram: https://instagram.com/BigSacPrints/",
+            "主页链接": "Instagram: https://instagram.com/BigSacPrints/",
             "合作阶段": "已触达"
           }
         }];
@@ -431,7 +432,7 @@ describe("Feishu creator matching", () => {
     });
     assert.equal("合作阶段" in fields, false);
     assert.equal(fields["最近发件邮箱"], "creator@example.com");
-    assert.equal(fields["最后联系时间"], Date.parse("2026-08-04T12:00:00.000Z"));
+    assert.equal("最后联系时间" in fields, false);
   });
 
   it("formats exact reply counts and real received times for the same Base row", () => {
@@ -451,8 +452,8 @@ describe("Feishu creator matching", () => {
       detailLines: [line, "2026-08-03 09:15（北京时间）｜creator@example.com｜Re: Collaboration"]
     });
     assert.equal(fields["累计回复邮件数"], 2);
-    assert.equal(fields["首次回复时间"], first.getTime());
-    assert.equal(fields["最近回复时间"], latest.getTime());
+    assert.equal("首次回复时间" in fields, false);
+    assert.equal("最近回复时间" in fields, false);
     assert.match(String(fields["回复邮件明细"]), /2026-08-01 14:32（北京时间）/u);
   });
 });

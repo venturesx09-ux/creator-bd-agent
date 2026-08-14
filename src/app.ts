@@ -30,7 +30,7 @@ import {
   type MailboxServiceLike
 } from "./mailbox-service.js";
 
-const APP_VERSION = "5.4.2";
+const APP_VERSION = "5.5.0";
 
 type Logger = Pick<Console, "info" | "error">;
 type RequestWithRawBody = Request & { rawBody?: Buffer };

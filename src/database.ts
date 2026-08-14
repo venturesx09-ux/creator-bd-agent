@@ -429,7 +429,13 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS matched_record_id VARCHAR(128),
         ADD COLUMN IF NOT EXISTS base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending',
         ADD COLUMN IF NOT EXISTS match_reason VARCHAR(64),
-        ADD COLUMN IF NOT EXISTS unmatched_record_id VARCHAR(128)
+        ADD COLUMN IF NOT EXISTS unmatched_record_id VARCHAR(128),
+        ADD COLUMN IF NOT EXISTS match_attempted_at TIMESTAMPTZ
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS email_messages_match_retry_idx
+      ON email_messages (mailbox_id, match_attempted_at, received_at DESC)
+      WHERE match_status <> 'matched'
     `);
     await this.pool.query(`
       DO $$
@@ -975,7 +981,16 @@ export class PostgresMailboxRepository implements MailboxRepository {
                        OR (matched_record_id IS NOT NULL
                            AND ai_analysis_status = 'completed'
                            AND ai_base_sync_status <> 'synced'))))
-       ORDER BY received_at DESC NULLS LAST, created_at DESC
+       ORDER BY
+         CASE
+           WHEN classification = 'unknown' THEN 0
+           WHEN match_status = 'matched' THEN 1
+           ELSE 2
+         END,
+         CASE WHEN match_status <> 'matched' THEN match_attempted_at END
+           ASC NULLS FIRST,
+         received_at ASC NULLS LAST,
+         created_at ASC
        LIMIT $2`,
       [mailboxId, limit]
     );
@@ -1047,6 +1062,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
       `UPDATE email_messages
        SET match_status = $2::varchar, matched_record_id = $3,
            match_reason = $4,
+           match_attempted_at = NOW(),
            base_sync_status = CASE
              WHEN $2::text = 'matched' THEN 'synced'
              ELSE 'pending'
