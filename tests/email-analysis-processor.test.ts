@@ -264,6 +264,38 @@ describe("AI email analysis", () => {
     assert.deepEqual(Object.keys(writtenFields).sort(), ["AI中文摘要", "报价"].sort());
   });
 
+  it("suppresses repeated API calls when failure state cannot be saved", async () => {
+    let calls = 0;
+    const processor = new DefaultEmailAnalysisProcessor(
+      {
+        model: "gpt-5.6-luna",
+        analyze: async () => {
+          calls += 1;
+          throw new Error("upstream failure");
+        }
+      },
+      {
+        recordMessageAnalysisFailure: async () => {
+          throw new Error("database write failed");
+        }
+      } as unknown as MailboxRepository,
+      new SecretBox(Buffer.alloc(32, 8).toString("base64")),
+      {} as FeishuClient
+    );
+    const message: MessageSummary = {
+      id: "message-cooldown", uid: 5, subject: "Re", from: [],
+      fromAddresses: ["creator@example.com"], to: [], messageId: "m5",
+      references: [], textPreview: "Interested.",
+      classification: "creator_reply", matchStatus: "matched",
+      matchedRecordId: "rec5", aiAnalysisStatus: "pending",
+      aiBaseSyncStatus: "pending"
+    };
+
+    await assert.rejects(processor.process(message), /OPENAI_ANALYSIS_FAILED/u);
+    await assert.rejects(processor.process(message), /AI_RETRY_STATE_UNAVAILABLE/u);
+    assert.equal(calls, 1);
+  });
+
   it("keeps reply drafting disabled", async () => {
     const processor = new DefaultEmailAnalysisProcessor(
       { model: "gpt-5.6-luna", analyze: async () => analysis },

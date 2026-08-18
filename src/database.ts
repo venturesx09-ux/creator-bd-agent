@@ -1228,7 +1228,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
            ai_analyzed_at = NOW(),
            ai_attempt_count = ai_attempt_count + 1,
            ai_next_retry_at = CASE
-             WHEN $2 NOT IN (
+             WHEN $3::text NOT IN (
                'OPENAI_TIMEOUT',
                'OPENAI_RATE_LIMITED',
                'OPENAI_UNAVAILABLE'
@@ -1239,7 +1239,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
              ELSE NULL
            END
        WHERE id = $1`,
-      [messageId, errorCode]
+      [messageId, errorCode, errorCode]
     );
   }
 

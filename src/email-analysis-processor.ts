@@ -83,6 +83,7 @@ export function automaticRetryDelayMs(
 
 export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
   private readonly active = new Map<string, Promise<EmailAnalysis>>();
+  private readonly retryStateWriteCooldown = new Map<string, number>();
 
   constructor(
     private readonly client: EmailAnalysisClient,
@@ -92,6 +93,13 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
   ) {}
 
   async process(message: MessageSummary, force = false): Promise<EmailAnalysis> {
+    const suppressedUntil = this.retryStateWriteCooldown.get(message.id);
+    if (!force && suppressedUntil !== undefined) {
+      if (suppressedUntil > Date.now()) {
+        throw new Error("AI_RETRY_STATE_UNAVAILABLE");
+      }
+      this.retryStateWriteCooldown.delete(message.id);
+    }
     const existing = this.active.get(message.id);
     if (existing) return existing;
     const job = this.processOnce(message, force).finally(() => {
@@ -173,7 +181,6 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
         delete message.aiErrorCode;
       } catch (error) {
         const errorCode = safeErrorCode(error);
-        await this.repository.recordMessageAnalysisFailure(message.id, errorCode);
         message.aiAnalysisStatus = "failed";
         message.aiAnalyzedAt = new Date().toISOString();
         message.aiErrorCode = errorCode;
@@ -186,6 +193,23 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
           message.aiNextRetryAt = new Date(Date.now() + retryDelay).toISOString();
         } else {
           delete message.aiNextRetryAt;
+        }
+        try {
+          await this.repository.recordMessageAnalysisFailure(message.id, errorCode);
+          this.retryStateWriteCooldown.delete(message.id);
+        } catch (persistenceError) {
+          this.retryStateWriteCooldown.set(
+            message.id,
+            Date.now() + 30 * 60 * 1_000
+          );
+          console.error(JSON.stringify({
+            event: "ai_failure_state_persist_failed",
+            messageId: message.id,
+            originalCode: errorCode,
+            message: persistenceError instanceof Error
+              ? persistenceError.message
+              : "Database error"
+          }));
         }
         throw new Error(errorCode);
       }
