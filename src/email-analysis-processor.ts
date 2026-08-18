@@ -6,6 +6,7 @@ import type { MessageSummary } from "./mailbox-service.js";
 import { SecretBox } from "./secret-box.js";
 
 export interface EmailAnalysisProcessor {
+  testConnection(): Promise<{ status: "ok"; model: string }>;
   process(message: MessageSummary, force?: boolean): Promise<EmailAnalysis>;
   translateDraft(message: MessageSummary, draftZh: string): Promise<EmailAnalysis>;
   saveDrafts(
@@ -50,16 +51,45 @@ function unmatchedAnalysisFields(
   };
 }
 
+export function providerErrorCode(input: {
+  status?: number;
+  code?: string | null;
+  message?: string;
+}): string {
+  const code = input.code?.trim().toLowerCase() ?? "";
+  const message = input.message?.trim().toLowerCase() ?? "";
+  if (input.status === 401) return "OPENAI_AUTH_FAILED";
+  if (input.status === 403) {
+    if (
+      code === "insufficient_user_quota" ||
+      message.includes("balance is insufficient") ||
+      message.includes("insufficient quota")
+    ) return "OPENAI_QUOTA_EXHAUSTED";
+    if (message.includes("approved ip")) return "OPENAI_IP_RESTRICTED";
+    if (
+      message.includes("not authorized") &&
+      message.includes("model")
+    ) return "OPENAI_MODEL_FORBIDDEN";
+    if (message.includes("account suspended")) return "OPENAI_ACCOUNT_SUSPENDED";
+    return "OPENAI_FORBIDDEN";
+  }
+  if (input.status === 429) return "OPENAI_RATE_LIMITED";
+  if (input.status !== undefined && input.status >= 500) {
+    return "OPENAI_UNAVAILABLE";
+  }
+  return "OPENAI_ANALYSIS_FAILED";
+}
+
 function safeErrorCode(error: unknown): string {
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
     return "OPENAI_TIMEOUT";
   }
   if (error instanceof OpenAI.APIError) {
-    if (error.status === 401 || error.status === 403) return "OPENAI_AUTH_FAILED";
-    if (error.status === 429) return "OPENAI_RATE_LIMITED";
-    if (error.status !== undefined && error.status >= 500) {
-      return "OPENAI_UNAVAILABLE";
-    }
+    return providerErrorCode({
+      ...(error.status !== undefined ? { status: error.status } : {}),
+      ...(typeof error.code === "string" ? { code: error.code } : {}),
+      message: error.message
+    });
   }
   return "OPENAI_ANALYSIS_FAILED";
 }
@@ -91,6 +121,21 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
     private readonly secretBox: SecretBox,
     private readonly feishuClient: FeishuClient
   ) {}
+
+  async testConnection(): Promise<{ status: "ok"; model: string }> {
+    try {
+      await this.client.analyze({
+        project: "connection-test",
+        mailboxEmail: "test@example.invalid",
+        subject: "AI connection test",
+        from: ["System Test <test@example.invalid>"],
+        text: "This is a connectivity test. There is no creator quote."
+      });
+      return { status: "ok", model: this.client.model };
+    } catch (error) {
+      throw new Error(safeErrorCode(error));
+    }
+  }
 
   async process(message: MessageSummary, force = false): Promise<EmailAnalysis> {
     const suppressedUntil = this.retryStateWriteCooldown.get(message.id);

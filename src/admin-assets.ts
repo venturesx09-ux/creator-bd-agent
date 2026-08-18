@@ -30,7 +30,7 @@ export const ADMIN_HTML = `<!doctype html>
       <section class="panel">
         <div class="section-heading">
           <div><h2>过去24小时</h2><p class="muted">规则分类与飞书达人匹配概览。</p></div>
-          <div class="heading-actions"><button id="refresh-summary" class="secondary" type="button">刷新概览</button><button id="logout-button" class="secondary" type="button">退出</button><span class="badge light">AUTO SYNC</span></div>
+          <div class="heading-actions"><button id="test-ai-button" class="secondary" type="button">测试AI连接</button><button id="retry-ai-button" class="secondary" type="button" disabled>重试失败AI分析</button><button id="refresh-summary" class="secondary" type="button">刷新概览</button><button id="logout-button" class="secondary" type="button">退出</button><span class="badge light">AUTO SYNC</span></div>
         </div>
         <div id="summary-grid" class="summary-grid"></div>
       </section>
@@ -589,6 +589,30 @@ export const ADMIN_JS = `(() => {
   });
 
   byId('refresh-button').addEventListener('click', () => loadMailboxes().catch((error) => notify(error.message, true)));
+  byId('test-ai-button').addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    byId('retry-ai-button').disabled = true;
+    try {
+      const result = await api('/api/admin/ai/test', { method: 'POST' });
+      byId('retry-ai-button').disabled = false;
+      notify('AI连接测试成功：' + result.model + '。现在可重试最多500封失败邮件');
+    } catch (error) {
+      notify('AI连接测试失败：' + error.message, true);
+    } finally {
+      event.currentTarget.disabled = false;
+    }
+  });
+  byId('retry-ai-button').addEventListener('click', async (event) => {
+    if (!window.confirm('确认将最多500封OPENAI_AUTH_FAILED邮件重新加入AI分析队列？')) return;
+    event.currentTarget.disabled = true;
+    try {
+      const result = await api('/api/admin/ai/retry-failed', { method: 'POST' });
+      notify('已重新排队 ' + result.queued + ' 封邮件。请勿重复点击全部同步');
+      await loadSummary();
+    } catch (error) {
+      notify(error.message, true);
+    }
+  });
   byId('refresh-summary').addEventListener('click', () => loadSummary().then(() => notify('概览已刷新')).catch((error) => notify(error.message, true)));
   byId('refresh-feishu-index').addEventListener('click', async (event) => {
     event.currentTarget.disabled = true;

@@ -83,7 +83,7 @@ describe("health and authentication", () => {
     const response = await request(app).get("/health").expect(200);
 
     assert.equal(response.body.status, "ok");
-    assert.equal(response.body.version, "5.5.2");
+    assert.equal(response.body.version, "5.5.3");
     assert.equal(response.body.configuration.unmatchedTableConfigured, false);
     const serialized = JSON.stringify(response.body);
     assert.equal(serialized.includes(config.feishu.appSecret), false);
@@ -117,6 +117,16 @@ describe("mailbox admin", () => {
     smtpEnabled: false
   };
   const mailboxService: MailboxServiceLike = {
+    testAiConnection: async () => ({
+      status: "ok",
+      model: "gpt-4o-mini",
+      retryAllowedUntil: new Date(Date.now() + 600_000).toISOString()
+    }),
+    retryFailedAiAnalyses: async () => ({
+      status: "queued",
+      queued: 12,
+      batchLimit: 500
+    }),
     listMailboxes: async () => [mailbox],
     createMailbox: async () => mailbox,
     setMailboxEnabled: async (_id, enabled) => ({ ...mailbox, enabled }),
@@ -225,6 +235,8 @@ describe("mailbox admin", () => {
     );
     assert.match(response.text, /全部同步/u);
     assert.match(response.text, /刷新概览/u);
+    assert.match(response.text, /测试AI连接/u);
+    assert.match(response.text, /重试失败AI分析/u);
     assert.match(ADMIN_JS, /sessionStorage/u);
     assert.doesNotMatch(ADMIN_JS, /重新分析|正在调用AI分析/u);
     assert.match(ADMIN_JS, /系统正在自动生成中文摘要和报价/u);
@@ -233,6 +245,25 @@ describe("mailbox admin", () => {
     assert.match(ADMIN_JS, /无需匹配/u);
     assert.match(response.text, /message-filters/u);
     assert.doesNotThrow(() => new Function(ADMIN_JS));
+  });
+
+  it("protects AI connection testing and failed-analysis retry", async () => {
+    const app = createApp({ config, mailboxService, logger: silentLogger });
+    const auth = { authorization: `Bearer ${ADMIN_TOKEN}` };
+    await request(app).post("/api/admin/ai/test").expect(401);
+    const tested = await request(app)
+      .post("/api/admin/ai/test")
+      .set(auth)
+      .expect(200);
+    assert.equal(tested.body.model, "gpt-4o-mini");
+
+    await request(app).post("/api/admin/ai/retry-failed").expect(401);
+    const retried = await request(app)
+      .post("/api/admin/ai/retry-failed")
+      .set(auth)
+      .expect(202);
+    assert.equal(retried.body.queued, 12);
+    assert.equal(retried.body.batchLimit, 500);
   });
 
   it("protects and runs manual AI analysis", async () => {

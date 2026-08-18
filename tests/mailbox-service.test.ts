@@ -21,6 +21,8 @@ import type { SmtpFactory } from "../src/smtp-reply.js";
 
 class MemoryRepository implements MailboxRepository {
   rows: StoredMailbox[] = [];
+  failedAiQueued = 0;
+  failedAiResetCalls = 0;
 
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}
@@ -104,6 +106,13 @@ class MemoryRepository implements MailboxRepository {
   async getMessage(): Promise<StoredMessage | undefined> { return undefined; }
   async saveMessageAnalysis(): Promise<void> {}
   async recordMessageAnalysisFailure(): Promise<void> {}
+  async resetFailedMessageAnalyses(): Promise<{
+    queued: number;
+    mailboxIds: string[];
+  }> {
+    this.failedAiResetCalls += 1;
+    return { queued: this.failedAiQueued, mailboxIds: [] };
+  }
   async markMessageAnalysisSynced(): Promise<void> {}
   async claimMessageForSend(): Promise<"claimed"> { return "claimed"; }
   async recordMessageSent(): Promise<void> {}
@@ -345,6 +354,39 @@ describe("bounded AI retry eligibility", () => {
     assert.equal(shouldProcessAiMessage({
       ...base, aiAnalysisStatus: "failed"
     }, now), false);
+  });
+});
+
+describe("manual failed-AI recovery gate", () => {
+  it("requires one successful connection test for each retry batch", async () => {
+    const repository = new MemoryRepository();
+    repository.failedAiQueued = 23;
+    const service = new MailboxService(
+      repository,
+      new SecretBox(Buffer.alloc(32, 10).toString("base64")),
+      100,
+      undefined,
+      undefined,
+      {
+        testConnection: async () => ({ status: "ok", model: "gpt-4o-mini" })
+      } as never
+    );
+
+    await assert.rejects(
+      service.retryFailedAiAnalyses(),
+      (error: unknown) => error instanceof MailboxServiceError &&
+        error.errorCode === "AI_TEST_REQUIRED"
+    );
+    const test = await service.testAiConnection();
+    assert.equal(test.model, "gpt-4o-mini");
+    const retried = await service.retryFailedAiAnalyses();
+    assert.equal(retried.queued, 23);
+    assert.equal(repository.failedAiResetCalls, 1);
+    await assert.rejects(
+      service.retryFailedAiAnalyses(),
+      (error: unknown) => error instanceof MailboxServiceError &&
+        error.errorCode === "AI_TEST_REQUIRED"
+    );
   });
 });
 

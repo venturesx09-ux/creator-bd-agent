@@ -9,7 +9,8 @@ import {
 } from "../src/email-analysis.js";
 import {
   automaticRetryDelayMs,
-  DefaultEmailAnalysisProcessor
+  DefaultEmailAnalysisProcessor,
+  providerErrorCode
 } from "../src/email-analysis-processor.js";
 import type { FeishuClient } from "../src/feishu-client.js";
 import type { MessageSummary } from "../src/mailbox-service.js";
@@ -52,6 +53,44 @@ describe("AI email analysis", () => {
     assert.equal(automaticRetryDelayMs("OPENAI_RATE_LIMITED", 4), undefined);
     assert.equal(automaticRetryDelayMs("OPENAI_AUTH_FAILED", 1), undefined);
     assert.equal(automaticRetryDelayMs("OPENAI_ANALYSIS_FAILED", 1), undefined);
+  });
+
+  it("distinguishes AIHubMix authentication, quota, IP, and model errors", () => {
+    assert.equal(providerErrorCode({ status: 401 }), "OPENAI_AUTH_FAILED");
+    assert.equal(providerErrorCode({
+      status: 403,
+      code: "insufficient_user_quota"
+    }), "OPENAI_QUOTA_EXHAUSTED");
+    assert.equal(providerErrorCode({
+      status: 403,
+      message: "Forbidden - key allowed only from approved IP ranges"
+    }), "OPENAI_IP_RESTRICTED");
+    assert.equal(providerErrorCode({
+      status: 403,
+      message: "Key not authorized to access the requested model"
+    }), "OPENAI_MODEL_FORBIDDEN");
+    assert.equal(providerErrorCode({ status: 403 }), "OPENAI_FORBIDDEN");
+  });
+
+  it("tests AI connectivity without persisting or writing to Feishu", async () => {
+    let calls = 0;
+    const processor = new DefaultEmailAnalysisProcessor(
+      {
+        model: "gpt-4o-mini",
+        analyze: async () => {
+          calls += 1;
+          return analysis;
+        }
+      },
+      {} as MailboxRepository,
+      new SecretBox(Buffer.alloc(32, 9).toString("base64")),
+      {} as FeishuClient
+    );
+    assert.deepEqual(await processor.testConnection(), {
+      status: "ok",
+      model: "gpt-4o-mini"
+    });
+    assert.equal(calls, 1);
   });
 
   it("validates the structured analysis contract", () => {

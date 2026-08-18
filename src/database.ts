@@ -105,6 +105,11 @@ export type CreatorReplyAggregate = {
   detailLines: string[];
 };
 
+export type AiRetryResetResult = {
+  queued: number;
+  mailboxIds: string[];
+};
+
 export type DailySummary = {
   total: number;
   matched: number;
@@ -209,6 +214,10 @@ export interface MailboxRepository {
     model: string
   ): Promise<void>;
   recordMessageAnalysisFailure(messageId: string, errorCode: string): Promise<void>;
+  resetFailedMessageAnalyses(
+    errorCodes: string[],
+    limit: number
+  ): Promise<AiRetryResetResult>;
   markMessageAnalysisSynced(messageId: string): Promise<void>;
   claimMessageForSend(input: {
     attemptId: string;
@@ -1241,6 +1250,37 @@ export class PostgresMailboxRepository implements MailboxRepository {
        WHERE id = $1`,
       [messageId, errorCode, errorCode]
     );
+  }
+
+  async resetFailedMessageAnalyses(
+    errorCodes: string[],
+    limit: number
+  ): Promise<AiRetryResetResult> {
+    const result = await this.pool.query<{ mailbox_id: string }>(
+      `WITH candidates AS (
+         SELECT id
+         FROM email_messages
+         WHERE classification = 'creator_reply'
+           AND ai_analysis_status = 'failed'
+           AND ai_error_code::text = ANY($1::text[])
+         ORDER BY received_at ASC NULLS LAST, created_at ASC
+         LIMIT $2
+       )
+       UPDATE email_messages AS message
+       SET ai_analysis_status = 'pending',
+           ai_analyzed_at = NULL,
+           ai_error_code = NULL,
+           ai_attempt_count = 0,
+           ai_next_retry_at = NULL
+       FROM candidates
+       WHERE message.id = candidates.id
+       RETURNING message.mailbox_id`,
+      [errorCodes, limit]
+    );
+    return {
+      queued: result.rowCount ?? result.rows.length,
+      mailboxIds: [...new Set(result.rows.map((row) => row.mailbox_id))]
+    };
   }
 
   async markMessageAnalysisSynced(messageId: string): Promise<void> {

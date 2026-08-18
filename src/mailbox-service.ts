@@ -166,6 +166,16 @@ export class MailboxServiceError extends Error {
 }
 
 export interface MailboxServiceLike {
+  testAiConnection(): Promise<{
+    status: "ok";
+    model: string;
+    retryAllowedUntil: string;
+  }>;
+  retryFailedAiAnalyses(): Promise<{
+    status: "queued";
+    queued: number;
+    batchLimit: number;
+  }>;
   listMailboxes(): Promise<MailboxSummary[]>;
   createMailbox(input: unknown): Promise<MailboxSummary>;
   setMailboxEnabled(id: string, enabled: boolean): Promise<MailboxSummary>;
@@ -542,6 +552,7 @@ function imapError(error: unknown, fallbackCode: string): MailboxServiceError {
 export class MailboxService implements MailboxServiceLike {
   private readonly reprocessJobs = new Map<string, Promise<void>>();
   private readonly reprocessAgain = new Set<string>();
+  private aiRetryAllowedUntil = 0;
 
   constructor(
     private readonly repository: MailboxRepository,
@@ -552,6 +563,59 @@ export class MailboxService implements MailboxServiceLike {
     private readonly analysisProcessor?: EmailAnalysisProcessor,
     private readonly smtpFactory: SmtpFactory = defaultSmtpFactory
   ) {}
+
+  async testAiConnection(): Promise<{
+    status: "ok";
+    model: string;
+    retryAllowedUntil: string;
+  }> {
+    if (!this.analysisProcessor) {
+      throw new MailboxServiceError(
+        "AI analysis service is unavailable",
+        503,
+        "AI_ANALYSIS_UNAVAILABLE"
+      );
+    }
+    try {
+      const result = await this.analysisProcessor.testConnection();
+      this.aiRetryAllowedUntil = Date.now() + 10 * 60 * 1_000;
+      return {
+        ...result,
+        retryAllowedUntil: new Date(this.aiRetryAllowedUntil).toISOString()
+      };
+    } catch (error) {
+      this.aiRetryAllowedUntil = 0;
+      throw new MailboxServiceError(
+        "AI connection test failed",
+        502,
+        error instanceof Error ? error.message : "OPENAI_ANALYSIS_FAILED"
+      );
+    }
+  }
+
+  async retryFailedAiAnalyses(): Promise<{
+    status: "queued";
+    queued: number;
+    batchLimit: number;
+  }> {
+    if (this.aiRetryAllowedUntil <= Date.now()) {
+      throw new MailboxServiceError(
+        "Run a successful AI connection test before retrying failed analyses",
+        409,
+        "AI_TEST_REQUIRED"
+      );
+    }
+    const batchLimit = 500;
+    const result = await this.repository.resetFailedMessageAnalyses(
+      ["OPENAI_AUTH_FAILED"],
+      batchLimit
+    );
+    this.aiRetryAllowedUntil = 0;
+    for (const mailboxId of result.mailboxIds) {
+      this.scheduleReprocess(mailboxId);
+    }
+    return { status: "queued", queued: result.queued, batchLimit };
+  }
 
   async listMailboxes(): Promise<MailboxSummary[]> {
     const rows = await this.repository.listMailboxes();

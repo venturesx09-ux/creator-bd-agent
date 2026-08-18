@@ -30,7 +30,7 @@ import {
   type MailboxServiceLike
 } from "./mailbox-service.js";
 
-const APP_VERSION = "5.5.2";
+const APP_VERSION = "5.5.3";
 
 type Logger = Pick<Console, "info" | "error">;
 type RequestWithRawBody = Request & { rawBody?: Buffer };
@@ -364,6 +364,34 @@ export function createApp(options: CreateAppOptions): express.Express {
     async (_request, response, next) => {
       try {
         response.status(200).json(await requireMailboxService().getDailySummary());
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/ai/test",
+    adminOnly,
+    async (_request, response, next) => {
+      try {
+        response.status(200).json(
+          await requireMailboxService().testAiConnection()
+        );
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/ai/retry-failed",
+    adminOnly,
+    async (_request, response, next) => {
+      try {
+        response.status(202).json(
+          await requireMailboxService().retryFailedAiAnalyses()
+        );
       } catch (error) {
         next(error);
       }
