@@ -64,6 +64,23 @@ function safeErrorCode(error: unknown): string {
   return "OPENAI_ANALYSIS_FAILED";
 }
 
+const RETRYABLE_AI_ERROR_CODES = new Set([
+  "OPENAI_TIMEOUT",
+  "OPENAI_RATE_LIMITED",
+  "OPENAI_UNAVAILABLE"
+]);
+
+export function automaticRetryDelayMs(
+  errorCode: string,
+  failedAttemptCount: number
+): number | undefined {
+  if (!RETRYABLE_AI_ERROR_CODES.has(errorCode)) return undefined;
+  if (failedAttemptCount === 1) return 30 * 60 * 1_000;
+  if (failedAttemptCount === 2) return 2 * 60 * 60 * 1_000;
+  if (failedAttemptCount === 3) return 12 * 60 * 60 * 1_000;
+  return undefined;
+}
+
 export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
   private readonly active = new Map<string, Promise<EmailAnalysis>>();
 
@@ -150,6 +167,8 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
         message.aiAnalyzedAt = new Date().toISOString();
         message.aiModel = this.client.model;
         message.aiAnalysisSchemaVersion = 2;
+        message.aiAttemptCount = 0;
+        delete message.aiNextRetryAt;
         message.aiBaseSyncStatus = "pending";
         delete message.aiErrorCode;
       } catch (error) {
@@ -158,6 +177,16 @@ export class DefaultEmailAnalysisProcessor implements EmailAnalysisProcessor {
         message.aiAnalysisStatus = "failed";
         message.aiAnalyzedAt = new Date().toISOString();
         message.aiErrorCode = errorCode;
+        message.aiAttemptCount = (message.aiAttemptCount ?? 0) + 1;
+        const retryDelay = automaticRetryDelayMs(
+          errorCode,
+          message.aiAttemptCount
+        );
+        if (retryDelay !== undefined) {
+          message.aiNextRetryAt = new Date(Date.now() + retryDelay).toISOString();
+        } else {
+          delete message.aiNextRetryAt;
+        }
         throw new Error(errorCode);
       }
     }

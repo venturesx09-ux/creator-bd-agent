@@ -111,6 +111,8 @@ export type MessageSummary = {
   aiErrorCode?: string;
   aiModel?: string;
   aiAnalysisSchemaVersion?: number;
+  aiAttemptCount?: number;
+  aiNextRetryAt?: string;
   aiBaseSyncStatus?: AiBaseSyncStatus;
   replyAggregateSyncStatus?: import("./database.js").ReplyAggregateSyncStatus;
   sendStatus?: SendStatus;
@@ -120,6 +122,27 @@ export type MessageSummary = {
   sentCopyStatus?: SentCopyStatus;
   sendFeishuSyncStatus?: SendFeishuSyncStatus;
 };
+
+export function shouldProcessAiMessage(
+  message: MessageSummary,
+  now = Date.now()
+): boolean {
+  if (message.classification !== "creator_reply") return false;
+  if (message.aiAnalysisStatus === "pending") return true;
+  if (
+    (message.aiAnalysisSchemaVersion ?? 1) < 2 &&
+    message.aiAnalysisStatus !== "failed"
+  ) {
+    return true;
+  }
+  if (message.aiAnalysisStatus === "failed") {
+    return message.aiNextRetryAt !== undefined &&
+      Date.parse(message.aiNextRetryAt) <= now;
+  }
+  return message.aiAnalysisStatus === "completed" &&
+    message.matchedRecordId !== undefined &&
+    message.aiBaseSyncStatus !== "synced";
+}
 
 type EncryptedMessagePayload = Omit<MessageSummary, "id" | "uid">;
 type LegacyEncryptedMessagePayload = Partial<EncryptedMessagePayload> & {
@@ -1250,6 +1273,10 @@ export class MailboxService implements MailboxServiceLike {
       ...(row.aiErrorCode ? { aiErrorCode: row.aiErrorCode } : {}),
       ...(row.aiModel ? { aiModel: row.aiModel } : {}),
       aiAnalysisSchemaVersion: row.aiAnalysisSchemaVersion ?? 1,
+      aiAttemptCount: row.aiAttemptCount ?? 0,
+      ...(row.aiNextRetryAt
+        ? { aiNextRetryAt: row.aiNextRetryAt.toISOString() }
+        : {}),
       aiBaseSyncStatus: row.aiBaseSyncStatus,
       ...(row.replyAggregateSyncStatus
         ? { replyAggregateSyncStatus: row.replyAggregateSyncStatus }
@@ -1294,13 +1321,7 @@ export class MailboxService implements MailboxServiceLike {
     }
     if (this.analysisProcessor) {
       for (const message of messages) {
-        const shouldAnalyze =
-          message.classification === "creator_reply" &&
-          ((message.aiAnalysisSchemaVersion ?? 1) < 2 ||
-            message.aiAnalysisStatus === "pending" ||
-            (message.aiAnalysisStatus === "completed" &&
-              message.matchedRecordId !== undefined &&
-              message.aiBaseSyncStatus !== "synced"));
+        const shouldAnalyze = shouldProcessAiMessage(message);
         if (shouldAnalyze) {
           try {
             await this.analysisProcessor.process(message);

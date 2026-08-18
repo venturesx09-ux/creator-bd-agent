@@ -7,7 +7,10 @@ import {
   type EmailAnalysis,
   type EmailAnalysisClient
 } from "../src/email-analysis.js";
-import { DefaultEmailAnalysisProcessor } from "../src/email-analysis-processor.js";
+import {
+  automaticRetryDelayMs,
+  DefaultEmailAnalysisProcessor
+} from "../src/email-analysis-processor.js";
 import type { FeishuClient } from "../src/feishu-client.js";
 import type { MessageSummary } from "../src/mailbox-service.js";
 import { SecretBox } from "../src/secret-box.js";
@@ -42,6 +45,15 @@ const analysis: EmailAnalysis = {
 };
 
 describe("AI email analysis", () => {
+  it("uses bounded automatic retries only for transient AI failures", () => {
+    assert.equal(automaticRetryDelayMs("OPENAI_RATE_LIMITED", 1), 30 * 60 * 1_000);
+    assert.equal(automaticRetryDelayMs("OPENAI_TIMEOUT", 2), 2 * 60 * 60 * 1_000);
+    assert.equal(automaticRetryDelayMs("OPENAI_UNAVAILABLE", 3), 12 * 60 * 60 * 1_000);
+    assert.equal(automaticRetryDelayMs("OPENAI_RATE_LIMITED", 4), undefined);
+    assert.equal(automaticRetryDelayMs("OPENAI_AUTH_FAILED", 1), undefined);
+    assert.equal(automaticRetryDelayMs("OPENAI_ANALYSIS_FAILED", 1), undefined);
+  });
+
   it("validates the structured analysis contract", () => {
     assert.deepEqual(EmailAnalysisSchema.parse(analysis), analysis);
     assert.throws(() => EmailAnalysisSchema.parse({ ...analysis, currency: "dollars" }));

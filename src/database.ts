@@ -86,6 +86,8 @@ export type StoredMessage = {
   aiErrorCode?: string;
   aiModel?: string;
   aiAnalysisSchemaVersion?: number;
+  aiAttemptCount?: number;
+  aiNextRetryAt?: Date;
   aiBaseSyncStatus: AiBaseSyncStatus;
   replyAggregateSyncStatus?: ReplyAggregateSyncStatus;
   sendStatus: SendStatus;
@@ -286,6 +288,8 @@ type MessageRow = {
   ai_error_code: string | null;
   ai_model: string | null;
   ai_analysis_schema_version: number;
+  ai_attempt_count: number;
+  ai_next_retry_at: Date | null;
   ai_base_sync_status: AiBaseSyncStatus;
   reply_aggregate_sync_status: ReplyAggregateSyncStatus;
   send_status: SendStatus;
@@ -320,6 +324,8 @@ function messageFromRow(row: MessageRow): StoredMessage {
     ...(row.ai_error_code ? { aiErrorCode: row.ai_error_code } : {}),
     ...(row.ai_model ? { aiModel: row.ai_model } : {}),
     aiAnalysisSchemaVersion: row.ai_analysis_schema_version ?? 1,
+    aiAttemptCount: row.ai_attempt_count ?? 0,
+    ...(row.ai_next_retry_at ? { aiNextRetryAt: row.ai_next_retry_at } : {}),
     aiBaseSyncStatus: row.ai_base_sync_status,
     replyAggregateSyncStatus: row.reply_aggregate_sync_status,
     sendStatus: row.send_status,
@@ -460,7 +466,27 @@ export class PostgresMailboxRepository implements MailboxRepository {
         ADD COLUMN IF NOT EXISTS ai_error_code VARCHAR(80),
         ADD COLUMN IF NOT EXISTS ai_model VARCHAR(100),
         ADD COLUMN IF NOT EXISTS ai_analysis_schema_version INTEGER NOT NULL DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS ai_attempt_count INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS ai_next_retry_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS ai_base_sync_status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    `);
+    await this.pool.query(`
+      UPDATE email_messages
+      SET ai_attempt_count = 1,
+          ai_next_retry_at = NOW()
+      WHERE ai_analysis_status = 'failed'
+        AND ai_attempt_count = 0
+        AND ai_next_retry_at IS NULL
+        AND ai_error_code IN (
+          'OPENAI_TIMEOUT',
+          'OPENAI_RATE_LIMITED',
+          'OPENAI_UNAVAILABLE'
+        )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS email_messages_ai_retry_idx
+      ON email_messages (mailbox_id, ai_next_retry_at)
+      WHERE ai_analysis_status = 'failed' AND ai_next_retry_at IS NOT NULL
     `);
     await this.pool.query(`
       ALTER TABLE email_messages
@@ -758,7 +784,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_analysis_schema_version,
+              ai_analysis_schema_version, ai_attempt_count, ai_next_retry_at,
               ai_base_sync_status, reply_aggregate_sync_status,
               send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
@@ -780,7 +806,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_analysis_schema_version,
+              ai_analysis_schema_version, ai_attempt_count, ai_next_retry_at,
               ai_base_sync_status, reply_aggregate_sync_status,
               send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
@@ -960,7 +986,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_analysis_schema_version,
+              ai_analysis_schema_version, ai_attempt_count, ai_next_retry_at,
               ai_base_sync_status, reply_aggregate_sync_status,
               send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
@@ -972,10 +998,11 @@ export class PostgresMailboxRepository implements MailboxRepository {
                        OR base_sync_status <> 'synced'
                        OR reply_aggregate_sync_status <> 'synced'
                        OR ai_analysis_status IN ('pending', 'skipped')
-                       OR ai_analysis_schema_version < 2
+                       OR (ai_analysis_schema_version < 2
+                           AND ai_analysis_status <> 'failed')
                        OR (ai_analysis_status = 'failed'
-                           AND (ai_analyzed_at IS NULL
-                                OR ai_analyzed_at < NOW() - INTERVAL '30 minutes'))
+                           AND ai_next_retry_at IS NOT NULL
+                           AND ai_next_retry_at <= NOW())
                        OR (send_status = 'sent'
                            AND send_feishu_sync_status = 'pending')
                        OR (matched_record_id IS NOT NULL
@@ -1007,7 +1034,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
               classification, match_status, matched_record_id, base_sync_status,
               match_reason, unmatched_record_id, ai_analysis_status,
               encrypted_ai_analysis, ai_analyzed_at, ai_error_code, ai_model,
-              ai_analysis_schema_version,
+              ai_analysis_schema_version, ai_attempt_count, ai_next_retry_at,
               ai_base_sync_status, reply_aggregate_sync_status,
               send_status, sent_at, sent_message_id,
               send_error_code, sent_copy_status, send_feishu_sync_status
@@ -1015,6 +1042,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
        WHERE mailbox_id = $1 AND uid_validity = $2
          AND classification = 'creator_reply'
          AND ai_analysis_schema_version < 2
+         AND ai_analysis_status <> 'failed'
        ORDER BY received_at DESC NULLS LAST, created_at DESC
        LIMIT $3`,
       [mailboxId, uidValidity, limit]
@@ -1032,7 +1060,9 @@ export class PostgresMailboxRepository implements MailboxRepository {
        SET encrypted_payload = $2, classification = $3,
            ai_analysis_status = 'pending', encrypted_ai_analysis = NULL,
            ai_analyzed_at = NULL, ai_error_code = NULL, ai_model = NULL,
-           ai_analysis_schema_version = 1, ai_base_sync_status = 'pending',
+           ai_analysis_schema_version = 1,
+           ai_attempt_count = 0, ai_next_retry_at = NULL,
+           ai_base_sync_status = 'pending',
            send_status = CASE
              WHEN send_status IN ('sending', 'sent') THEN send_status
              ELSE 'not_ready'
@@ -1173,6 +1203,7 @@ export class PostgresMailboxRepository implements MailboxRepository {
        SET ai_analysis_status = 'completed', encrypted_ai_analysis = $2,
            ai_analyzed_at = NOW(), ai_error_code = NULL, ai_model = $3,
            ai_analysis_schema_version = 2,
+           ai_attempt_count = 0, ai_next_retry_at = NULL,
            ai_base_sync_status = 'pending',
            send_status = CASE
              WHEN send_status IN ('sending', 'sent') THEN send_status
@@ -1194,7 +1225,19 @@ export class PostgresMailboxRepository implements MailboxRepository {
     await this.pool.query(
       `UPDATE email_messages
        SET ai_analysis_status = 'failed', ai_error_code = $2,
-           ai_analyzed_at = NOW()
+           ai_analyzed_at = NOW(),
+           ai_attempt_count = ai_attempt_count + 1,
+           ai_next_retry_at = CASE
+             WHEN $2 NOT IN (
+               'OPENAI_TIMEOUT',
+               'OPENAI_RATE_LIMITED',
+               'OPENAI_UNAVAILABLE'
+             ) THEN NULL
+             WHEN ai_attempt_count + 1 = 1 THEN NOW() + INTERVAL '30 minutes'
+             WHEN ai_attempt_count + 1 = 2 THEN NOW() + INTERVAL '2 hours'
+             WHEN ai_attempt_count + 1 = 3 THEN NOW() + INTERVAL '12 hours'
+             ELSE NULL
+           END
        WHERE id = $1`,
       [messageId, errorCode]
     );

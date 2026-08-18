@@ -544,8 +544,12 @@ export const ADMIN_JS = `(() => {
         analysisRow(ai, '飞书AI字段', message.aiBaseSyncStatus === 'synced' ? '已写回' : message.matchedRecordId ? '等待写回/写回失败' : '未匹配达人，暂不写回');
         if (message.aiAnalyzedAt) analysisRow(ai, '分析时间', new Date(message.aiAnalyzedAt).toLocaleString());
       } else {
+        const retryText = message.aiNextRetryAt
+          ? '；系统将在 ' + new Date(message.aiNextRetryAt).toLocaleString() + ' 后自动重试'
+          : '；已停止自动重试，避免继续消耗API额度';
         const reason = aiState === 'failed'
-          ? '上次分析失败：' + (message.aiErrorCode || '请稍后重试')
+          ? '上次分析失败：' + (message.aiErrorCode || '未知错误') +
+            '；失败次数：' + String(message.aiAttemptCount || 1) + retryText
           : message.classification === 'creator_reply'
             ? '系统正在自动生成中文摘要和报价，并在完成后写回飞书。'
             : '仅达人回复会进入AI分析。';

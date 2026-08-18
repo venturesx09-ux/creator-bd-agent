@@ -13,6 +13,7 @@ import {
   MailboxService,
   MailboxServiceError,
   parseMailboxSource,
+  shouldProcessAiMessage,
   type MailboxConnectionConfig
 } from "../src/mailbox-service.js";
 import { SecretBox } from "../src/secret-box.js";
@@ -320,6 +321,30 @@ describe("email rematching", () => {
       "unmatched",
       "matched-needs-aggregate"
     ]);
+  });
+});
+
+describe("bounded AI retry eligibility", () => {
+  const base = {
+    id: "retry", uid: 1, subject: "Re", from: [], fromAddresses: [], to: [],
+    messageId: "m", references: [], textPreview: "",
+    classification: "creator_reply" as const, matchStatus: "matched" as const,
+    matchedRecordId: "rec1", aiAnalysisSchemaVersion: 1
+  };
+
+  it("does not retry failed analysis before its scheduled time or after retries stop", () => {
+    const now = Date.parse("2026-08-18T08:00:00.000Z");
+    assert.equal(shouldProcessAiMessage({
+      ...base, aiAnalysisStatus: "failed",
+      aiNextRetryAt: "2026-08-18T08:30:00.000Z"
+    }, now), false);
+    assert.equal(shouldProcessAiMessage({
+      ...base, aiAnalysisStatus: "failed",
+      aiNextRetryAt: "2026-08-18T07:59:00.000Z"
+    }, now), true);
+    assert.equal(shouldProcessAiMessage({
+      ...base, aiAnalysisStatus: "failed"
+    }, now), false);
   });
 });
 
