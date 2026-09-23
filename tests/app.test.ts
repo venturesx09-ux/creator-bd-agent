@@ -83,7 +83,7 @@ describe("health and authentication", () => {
     const response = await request(app).get("/health").expect(200);
 
     assert.equal(response.body.status, "ok");
-    assert.equal(response.body.version, "5.5.3");
+    assert.equal(response.body.version, "6.0.0");
     assert.equal(response.body.configuration.unmatchedTableConfigured, false);
     const serialized = JSON.stringify(response.body);
     assert.equal(serialized.includes(config.feishu.appSecret), false);

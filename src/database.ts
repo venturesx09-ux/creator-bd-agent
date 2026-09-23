@@ -5,6 +5,8 @@ type Logger = Pick<Console, "error">;
 
 export type StoredMailbox = {
   id: string;
+  ownerUserId?: string;
+  ownerDisplayName?: string;
   label: string;
   brand: string;
   enabled: boolean;
@@ -138,13 +140,14 @@ export type FeishuCreatorIdIndexEntry = {
 export interface MailboxRepository {
   initialize(): Promise<void>;
   close(): Promise<void>;
-  listMailboxes(): Promise<StoredMailbox[]>;
-  getMailbox(id: string): Promise<StoredMailbox | undefined>;
+  listMailboxes(ownerUserId?: string): Promise<StoredMailbox[]>;
+  getMailbox(id: string, ownerUserId?: string): Promise<StoredMailbox | undefined>;
   createMailbox(input: {
     id: string;
     label: string;
     brand: string;
     encryptedConfig: string;
+    ownerUserId?: string;
   }): Promise<StoredMailbox>;
   setMailboxEnabled(id: string, enabled: boolean): Promise<boolean>;
   saveSmtpConfig(id: string, encryptedConfig: string): Promise<boolean>;
@@ -255,11 +258,13 @@ export interface MailboxRepository {
     cooperationStage: string,
     lastContactAt?: number
   ): Promise<void>;
-  getDailySummary(since: Date): Promise<DailySummary>;
+  getDailySummary(since: Date, ownerUserId?: string): Promise<DailySummary>;
 }
 
 type MailboxRow = {
   id: string;
+  owner_user_id: string | null;
+  owner_display_name?: string | null;
   label: string;
   brand: string;
   enabled: boolean;
@@ -349,6 +354,8 @@ function messageFromRow(row: MessageRow): StoredMessage {
 function mailboxFromRow(row: MailboxRow): StoredMailbox {
   return {
     id: row.id,
+    ...(row.owner_user_id ? { ownerUserId: row.owner_user_id } : {}),
+    ...(row.owner_display_name ? { ownerDisplayName: row.owner_display_name } : {}),
     label: row.label,
     brand: row.brand,
     enabled: row.enabled,
@@ -580,17 +587,23 @@ export class PostgresMailboxRepository implements MailboxRepository {
     await this.pool.end();
   }
 
-  async listMailboxes(): Promise<StoredMailbox[]> {
+  async listMailboxes(ownerUserId?: string): Promise<StoredMailbox[]> {
     const result = await this.pool.query<MailboxRow>(
-      "SELECT * FROM mailboxes ORDER BY created_at ASC"
+      `SELECT m.*, u.display_name AS owner_display_name
+       FROM mailboxes m LEFT JOIN app_users u ON u.id = m.owner_user_id
+       WHERE ($1::uuid IS NULL OR m.owner_user_id = $1)
+       ORDER BY m.created_at ASC`,
+      [ownerUserId ?? null]
     );
     return result.rows.map(mailboxFromRow);
   }
 
-  async getMailbox(id: string): Promise<StoredMailbox | undefined> {
+  async getMailbox(id: string, ownerUserId?: string): Promise<StoredMailbox | undefined> {
     const result = await this.pool.query<MailboxRow>(
-      "SELECT * FROM mailboxes WHERE id = $1",
-      [id]
+      `SELECT m.*, u.display_name AS owner_display_name
+       FROM mailboxes m LEFT JOIN app_users u ON u.id = m.owner_user_id
+       WHERE m.id = $1 AND ($2::uuid IS NULL OR m.owner_user_id = $2)`,
+      [id, ownerUserId ?? null]
     );
     const row = result.rows[0];
     return row ? mailboxFromRow(row) : undefined;
@@ -601,12 +614,13 @@ export class PostgresMailboxRepository implements MailboxRepository {
     label: string;
     brand: string;
     encryptedConfig: string;
+    ownerUserId?: string;
   }): Promise<StoredMailbox> {
     const result = await this.pool.query<MailboxRow>(
-      `INSERT INTO mailboxes (id, label, brand, encrypted_config)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO mailboxes (id, label, brand, encrypted_config, owner_user_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [input.id, input.label, input.brand, input.encryptedConfig]
+      [input.id, input.label, input.brand, input.encryptedConfig, input.ownerUserId ?? null]
     );
     const row = result.rows[0];
     if (!row) {
@@ -1440,17 +1454,19 @@ export class PostgresMailboxRepository implements MailboxRepository {
     );
   }
 
-  async getDailySummary(since: Date): Promise<DailySummary> {
+  async getDailySummary(since: Date, ownerUserId?: string): Promise<DailySummary> {
     const result = await this.pool.query<{
       classification: EmailClassification;
       match_status: MatchStatus;
       count: string;
     }>(
       `SELECT classification, match_status, COUNT(*) AS count
-       FROM email_messages
-       WHERE COALESCE(received_at, created_at) >= $1
+       FROM email_messages e
+       JOIN mailboxes m ON m.id = e.mailbox_id
+       WHERE COALESCE(e.received_at, e.created_at) >= $1
+         AND ($2::uuid IS NULL OR m.owner_user_id = $2)
        GROUP BY classification, match_status`,
-      [since]
+      [since, ownerUserId ?? null]
     );
     const summary: DailySummary = {
       total: 0,
@@ -1477,12 +1493,14 @@ export class PostgresMailboxRepository implements MailboxRepository {
     }
     const distinct = await this.pool.query<{ count: string }>(
       `SELECT COUNT(DISTINCT matched_record_id) AS count
-       FROM email_messages
-       WHERE COALESCE(received_at, created_at) >= $1
-         AND match_status = 'matched'
-         AND classification = 'creator_reply'
-         AND matched_record_id IS NOT NULL`,
-      [since]
+       FROM email_messages e
+       JOIN mailboxes m ON m.id = e.mailbox_id
+       WHERE COALESCE(e.received_at, e.created_at) >= $1
+         AND ($2::uuid IS NULL OR m.owner_user_id = $2)
+         AND e.match_status = 'matched'
+         AND e.classification = 'creator_reply'
+         AND e.matched_record_id IS NOT NULL`,
+      [since, ownerUserId ?? null]
     );
     summary.uniqueMatchedCreators = Number.parseInt(
       distinct.rows[0]?.count ?? "0",

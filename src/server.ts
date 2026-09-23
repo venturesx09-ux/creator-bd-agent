@@ -9,11 +9,14 @@ import { FeishuCreatorMatcher } from "./feishu-creator-matcher.js";
 import { FeishuProgressTracker } from "./feishu-progress.js";
 import { OpenAIEmailAnalysisClient } from "./email-analysis.js";
 import { DefaultEmailAnalysisProcessor } from "./email-analysis-processor.js";
+import { AuthRepository } from "./auth.js";
 
 async function start(): Promise<void> {
   const config = loadConfig();
   const repository = new PostgresMailboxRepository(config.database);
   await repository.initialize();
+  const authRepository = new AuthRepository(config.database);
+  await authRepository.initialize();
   const feishuClient = new FeishuClient({ config: config.feishu });
   const secretBox = new SecretBox(config.mailboxEncryptionKey);
   const analysisClient = new OpenAIEmailAnalysisClient(config.openai);
@@ -48,7 +51,8 @@ async function start(): Promise<void> {
     mailboxService,
     feishuClient,
     feishuProgress,
-    feishuIndexRefresher: feishuMatcher
+    feishuIndexRefresher: feishuMatcher,
+    authRepository
   });
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(
@@ -80,6 +84,10 @@ async function start(): Promise<void> {
         console.error(
           JSON.stringify({ event: "database_stop_failed", message: "Database error" })
         );
+        process.exitCode = 1;
+      });
+      await authRepository.close().catch(() => {
+        console.error(JSON.stringify({ event: "auth_database_stop_failed", message: "Database error" }));
         process.exitCode = 1;
       });
     });
