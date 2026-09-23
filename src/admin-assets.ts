@@ -3,27 +3,30 @@ export const ADMIN_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Creator BD Agent 工作台</title>
+  <title>Flourish Culture BD 工作台</title>
   <link rel="stylesheet" href="/admin/styles.css">
 </head>
 <body>
   <main>
     <header>
       <div>
-        <p class="eyebrow">CREATOR BD AGENT</p>
-        <h1>Creator BD工作台</h1>
+        <p class="eyebrow">FLOURISH CULTURE</p>
+        <h1>Creator BD工作台 · 团队版</h1>
         <p class="muted">自动只读同步邮箱、匹配飞书，并生成中文摘要；报价继续在后台提取并写回飞书。当前不生成回复草稿，也不提供邮件发送入口。</p>
       </div>
       <span class="badge">AI ASSISTED</span>
     </header>
 
     <section class="panel" id="login-panel">
-      <h2>管理员验证</h2>
-      <p class="muted">输入Render中的ADMIN_TOKEN。Token仅保存在当前浏览器标签会话中，页面刷新后仍可继续使用，关闭标签后清除。</p>
-      <div class="row">
-        <input id="admin-token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-        <button id="connect-button" type="button">进入管理</button>
+      <h2 id="login-title">团队成员登录</h2>
+      <p class="muted" id="login-help">使用 Flourish Culture 团队账号登录。</p>
+      <div class="grid">
+        <label id="display-name-label" hidden>姓名<input id="display-name" maxlength="100" autocomplete="name"></label>
+        <label>邮箱<input id="login-email" type="email" maxlength="254" autocomplete="username"></label>
+        <label>密码<input id="login-password" type="password" maxlength="200" autocomplete="current-password"></label>
+        <label id="bootstrap-token-label" hidden>首次设置令牌<input id="bootstrap-token" type="password" autocomplete="off" placeholder="Render ADMIN_TOKEN"></label>
       </div>
+      <button id="connect-button" type="button">登录</button>
     </section>
 
     <section id="workspace" hidden>
@@ -66,6 +69,20 @@ export const ADMIN_HTML = `<!doctype html>
           <p class="muted">这里显示邮箱读取进度；飞书匹配和写回会在后台继续执行。</p>
         </div>
         <div id="mailbox-list" class="cards"></div>
+      </section>
+
+      <section class="panel" id="team-panel" hidden>
+        <div class="section-heading"><div><h2>团队成员</h2><p class="muted">管理员可以创建或停用成员；普通成员只能看到自己的邮箱和邮件。</p></div></div>
+        <div id="member-list" class="cards"></div>
+        <form id="member-form">
+          <div class="grid">
+            <label>姓名<input name="displayName" required maxlength="100"></label>
+            <label>登录邮箱<input name="email" type="email" required maxlength="254"></label>
+            <label>初始密码<input name="password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
+            <label>角色<select name="role"><option value="member">普通成员</option><option value="admin">管理员</option></select></label>
+          </div>
+          <button type="submit">创建成员</button>
+        </form>
       </section>
 
       <section class="panel" id="smtp-panel" hidden>
@@ -131,8 +148,11 @@ export const ADMIN_CSS_EXTRA = `main{width:min(1180px,calc(100% - 32px))}.messag
 export const ADMIN_CSS_DRAFT = `.draft-editor{border-top:1px solid rgba(0,0,0,.08);margin-top:10px;padding-top:10px}.draft-editor label{margin-top:9px}.draft-editor textarea,#smtp-form textarea{width:100%;min-height:140px;resize:vertical;border:1px solid #cfd9ed;border-radius:9px;padding:10px;background:#fff;font:inherit;font-size:13px;line-height:1.55}.draft-editor textarea:focus,#smtp-form textarea:focus{outline:2px solid #365fba;outline-offset:1px}.draft-editor .actions{margin-top:10px}.checkbox-row{display:flex;align-items:center;align-self:end;gap:9px;padding:11px 0}.checkbox-row input{width:auto}.smtp-ready{color:#147a39}.smtp-warning{color:#9a6700}.send-warning{background:#fff7df;border:1px solid #f0d785;border-radius:9px;padding:10px;margin-top:10px!important}.actions button.send-confirm{background:#a32119;color:#fff;border-color:#a32119}`;
 
 export const ADMIN_JS = `(() => {
-  const tokenStorageKey = 'creator-bd-agent-admin-token';
+  const tokenStorageKey = 'flourish-culture-session';
   let adminToken = window.sessionStorage.getItem(tokenStorageKey) || '';
+  let needsBootstrap = false;
+  let currentUser = null;
+  let teamMembers = [];
   let currentMailboxes = [];
   let currentMessageMailbox = null;
   let currentMessages = [];
@@ -192,6 +212,28 @@ export const ADMIN_JS = `(() => {
     return node;
   }
 
+  async function loadMembers() {
+    if (!currentUser || currentUser.role === 'member') return;
+    const data = await api('/api/team/members');
+    teamMembers = data.members;
+    const list = byId('member-list');
+    list.replaceChildren();
+    data.members.forEach((member) => {
+      const card = element('div', undefined, 'mailbox' + (member.enabled ? '' : ' disabled'));
+      const top = element('div', undefined, 'mailbox-top');
+      const info = element('div');
+      info.append(element('h3', member.displayName));
+      info.append(element('div', member.email + ' · ' + ({ owner: '所有者', admin: '管理员', member: '普通成员' }[member.role] || member.role), 'meta'));
+      top.append(info);
+      if (member.role !== 'owner') top.append(button(member.enabled ? '停用' : '启用', async () => {
+        await api('/api/team/members/' + member.id + '/status', { method: 'PATCH', body: JSON.stringify({ enabled: !member.enabled }) });
+        await loadMembers();
+      }));
+      card.append(top); list.append(card);
+    });
+    byId('team-panel').hidden = false;
+  }
+
   function openSmtpForm(mailbox) {
     const form = byId('smtp-form');
     form.reset();
@@ -236,9 +278,27 @@ export const ADMIN_JS = `(() => {
               ? 'SMTP测试失败：' + (mailbox.smtpLastErrorCode || '请检查配置')
               : 'SMTP已配置，等待测试';
       info.append(element('div', smtpText, 'meta ' + (mailbox.smtpEnabled ? 'smtp-ready' : 'smtp-warning')));
+      if (mailbox.ownerDisplayName) info.append(element('div', '负责人：' + mailbox.ownerDisplayName, 'meta'));
       const stateText = !mailbox.enabled ? '已停用' : mailbox.lastTestStatus === 'success' ? '连接正常' : mailbox.lastTestStatus === 'failed' ? '连接失败' : '未测试';
       top.append(info, element('span', stateText, 'state ' + (!mailbox.enabled ? 'disabled' : (mailbox.lastTestStatus || ''))));
       const actions = element('div', undefined, 'actions');
+      if (currentUser && currentUser.role !== 'member' && teamMembers.length) {
+        const ownerSelect = element('select');
+        teamMembers.filter((member) => member.enabled).forEach((member) => {
+          const option = element('option', member.displayName + ' · ' + member.email);
+          option.value = member.id;
+          option.selected = member.id === mailbox.ownerUserId;
+          ownerSelect.append(option);
+        });
+        const ownerWrap = element('div', undefined, 'actions');
+        ownerWrap.append(ownerSelect, button('分配负责人', async () => {
+          await api('/api/team/mailboxes/' + mailbox.id + '/owner', {
+            method: 'PATCH', body: JSON.stringify({ userId: ownerSelect.value })
+          });
+          notify('邮箱负责人已更新'); await loadMailboxes();
+        }));
+        card.append(ownerWrap);
+      }
       actions.append(
         button('测试IMAP', async () => {
           const result = await api('/api/admin/mailboxes/' + mailbox.id + '/test', { method: 'POST' });
@@ -571,16 +631,39 @@ export const ADMIN_JS = `(() => {
   }
 
   byId('connect-button').addEventListener('click', async () => {
-    adminToken = byId('admin-token').value.trim();
-    if (!adminToken) return notify('请输入ADMIN_TOKEN', true);
+    const email = byId('login-email').value.trim();
+    const password = byId('login-password').value;
+    if (!email || !password) return notify('请输入邮箱和密码', true);
     try {
+      if (needsBootstrap) {
+        const setupToken = byId('bootstrap-token').value.trim();
+        const displayName = byId('display-name').value.trim();
+        if (!setupToken || !displayName) return notify('首次设置需要姓名和ADMIN_TOKEN', true);
+        const setupResponse = await fetch('/api/auth/bootstrap', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + setupToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, displayName, password })
+        });
+        const setupData = await setupResponse.json().catch(() => ({}));
+        if (!setupResponse.ok) throw new Error(setupData.message || '初始化失败');
+      }
+      const loginResponse = await fetch('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const loginData = await loginResponse.json().catch(() => ({}));
+      if (!loginResponse.ok) throw new Error(loginData.message || '登录失败');
+      adminToken = loginData.token;
+      currentUser = loginData.user;
+      await loadMembers();
       await loadMailboxes();
       window.sessionStorage.setItem(tokenStorageKey, adminToken);
-      byId('admin-token').value = '';
+      byId('login-password').value = '';
+      byId('bootstrap-token').value = '';
       byId('login-panel').hidden = true;
       byId('workspace').hidden = false;
       startProgressPolling();
-      notify('管理员验证成功');
+      notify('登录成功');
     } catch (error) {
       window.sessionStorage.removeItem(tokenStorageKey);
       adminToken = '';
@@ -635,13 +718,14 @@ export const ADMIN_JS = `(() => {
     loadMessages(currentMessageMailbox.id, currentMessageMailbox.label).then(() => notify('邮件列表已刷新')).catch((error) => notify(error.message, true));
   });
   byId('logout-button').addEventListener('click', () => {
+    api('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     stopProgressPolling();
     window.sessionStorage.removeItem(tokenStorageKey);
     adminToken = '';
     currentMailboxes = [];
     byId('workspace').hidden = true;
     byId('login-panel').hidden = false;
-    notify('已退出当前管理会话');
+    notify('已退出当前账号');
   });
   byId('close-messages').addEventListener('click', () => { byId('message-panel').hidden = true; });
   byId('close-smtp').addEventListener('click', () => { byId('smtp-panel').hidden = true; });
@@ -693,8 +777,32 @@ export const ADMIN_JS = `(() => {
     }
   });
 
+  byId('member-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    try {
+      const values = Object.fromEntries(new FormData(form).entries());
+      await api('/api/team/members', { method: 'POST', body: JSON.stringify(values) });
+      form.reset(); notify('成员账号已创建'); await loadMembers();
+    } catch (error) { notify(error.message, true); }
+    finally { submit.disabled = false; }
+  });
+
+  fetch('/api/auth/status').then((response) => response.json()).then((data) => {
+    needsBootstrap = !data.initialized;
+    byId('display-name-label').hidden = !needsBootstrap;
+    byId('bootstrap-token-label').hidden = !needsBootstrap;
+    byId('login-title').textContent = needsBootstrap ? '创建 Flourish Culture 管理员' : '团队成员登录';
+    byId('login-help').textContent = needsBootstrap
+      ? '仅首次设置：输入姓名、邮箱、至少12位密码，以及Render中的ADMIN_TOKEN。现有邮箱和历史数据会归入此账号。'
+      : '使用 Flourish Culture 团队账号登录。';
+    byId('connect-button').textContent = needsBootstrap ? '创建管理员并登录' : '登录';
+  }).catch(() => undefined);
+
   if (adminToken) {
-    loadMailboxes().then(() => {
+    api('/api/auth/me').then((data) => { currentUser = data.user; return loadMembers(); }).then(() => loadMailboxes()).then(() => {
       byId('login-panel').hidden = true;
       byId('workspace').hidden = false;
       startProgressPolling();

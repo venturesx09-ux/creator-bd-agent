@@ -62,6 +62,8 @@ export type CreateMailboxInput = MailboxConnectionConfig & {
 
 export type MailboxSummary = {
   id: string;
+  ownerUserId?: string;
+  ownerDisplayName?: string;
   label: string;
   brand: string;
   emailAddress: string;
@@ -105,6 +107,8 @@ export type MessageSummary = {
   mailboxLabel?: string;
   mailboxEmail?: string;
   project?: string;
+  ownerUserId?: string;
+  ownerDisplayName?: string;
   aiAnalysisStatus?: AiAnalysisStatus;
   analysis?: EmailAnalysis;
   aiAnalyzedAt?: string;
@@ -176,31 +180,32 @@ export interface MailboxServiceLike {
     queued: number;
     batchLimit: number;
   }>;
-  listMailboxes(): Promise<MailboxSummary[]>;
-  createMailbox(input: unknown): Promise<MailboxSummary>;
-  setMailboxEnabled(id: string, enabled: boolean): Promise<MailboxSummary>;
-  deleteMailbox(id: string): Promise<{ status: "deleted" }>;
-  testConnection(id: string): Promise<{
+  listMailboxes(ownerUserId?: string): Promise<MailboxSummary[]>;
+  createMailbox(input: unknown, ownerUserId?: string): Promise<MailboxSummary>;
+  setMailboxEnabled(id: string, enabled: boolean, ownerUserId?: string): Promise<MailboxSummary>;
+  deleteMailbox(id: string, ownerUserId?: string): Promise<{ status: "deleted" }>;
+  testConnection(id: string, ownerUserId?: string): Promise<{
     status: "ok";
     messagesInInbox: number;
     nextUid: number;
-  }>;
-  configureSmtp(id: string, input: unknown): Promise<MailboxSummary>;
-  testSmtp(id: string): Promise<{ status: "ok" }>;
-  setSmtpEnabled(id: string, enabled: boolean): Promise<MailboxSummary>;
-  syncMailbox(id: string): Promise<{
+  }>; 
+  configureSmtp(id: string, input: unknown, ownerUserId?: string): Promise<MailboxSummary>;
+  testSmtp(id: string, ownerUserId?: string): Promise<{ status: "ok" }>;
+  setSmtpEnabled(id: string, enabled: boolean, ownerUserId?: string): Promise<MailboxSummary>;
+  syncMailbox(id: string, ownerUserId?: string): Promise<{
     status: "ok";
     fetched: number;
     inserted: number;
     hasMore: boolean;
     messages: MessageSummary[];
   }>;
-  listMessages(id: string, limit: number): Promise<MessageSummary[]>;
-  analyzeMessage(id: string, messageId: string): Promise<MessageSummary>;
+  listMessages(id: string, limit: number, ownerUserId?: string): Promise<MessageSummary[]>;
+  analyzeMessage(id: string, messageId: string, ownerUserId?: string): Promise<MessageSummary>;
   updateMessageDrafts(
     id: string,
     messageId: string,
-    input: { draftZh: string; draftEn?: string; translate: boolean }
+    input: { draftZh: string; draftEn?: string; translate: boolean },
+    ownerUserId?: string
   ): Promise<MessageSummary>;
   sendReply(
     id: string,
@@ -210,14 +215,15 @@ export interface MailboxServiceLike {
       recipient: string;
       draftZh: string;
       draftEn: string;
-    }
+    },
+    ownerUserId?: string
   ): Promise<MessageSummary>;
-  syncAllEnabled(): Promise<{
+  syncAllEnabled(ownerUserId?: string): Promise<{
     attempted: number;
     succeeded: number;
     failed: number;
   }>;
-  getDailySummary(): Promise<DailySummary & { since: string }>;
+  getDailySummary(ownerUserId?: string): Promise<DailySummary & { since: string }>;
 }
 
 export interface CreatorMatcher {
@@ -617,33 +623,35 @@ export class MailboxService implements MailboxServiceLike {
     return { status: "queued", queued: result.queued, batchLimit };
   }
 
-  async listMailboxes(): Promise<MailboxSummary[]> {
-    const rows = await this.repository.listMailboxes();
+  async listMailboxes(ownerUserId?: string): Promise<MailboxSummary[]> {
+    const rows = await this.repository.listMailboxes(ownerUserId);
     return rows.map((row) => this.toSummary(row));
   }
 
-  async createMailbox(value: unknown): Promise<MailboxSummary> {
+  async createMailbox(value: unknown, ownerUserId?: string): Promise<MailboxSummary> {
     const input = validateCreateInput(value);
     const { label, brand, ...connection } = input;
     const row = await this.repository.createMailbox({
       id: randomUUID(),
       label,
       brand,
-      encryptedConfig: this.secretBox.encrypt(connection)
+      encryptedConfig: this.secretBox.encrypt(connection),
+      ...(ownerUserId ? { ownerUserId } : {})
     });
     return this.toSummary(row);
   }
 
-  async setMailboxEnabled(id: string, enabled: boolean): Promise<MailboxSummary> {
-    await this.requireMailbox(id);
+  async setMailboxEnabled(id: string, enabled: boolean, ownerUserId?: string): Promise<MailboxSummary> {
+    await this.requireMailbox(id, ownerUserId);
     const updated = await this.repository.setMailboxEnabled(id, enabled);
     if (!updated) {
       throw new MailboxServiceError("Mailbox not found", 404, "MAILBOX_NOT_FOUND");
     }
-    return this.toSummary(await this.requireMailbox(id));
+    return this.toSummary(await this.requireMailbox(id, ownerUserId));
   }
 
-  async deleteMailbox(id: string): Promise<{ status: "deleted" }> {
+  async deleteMailbox(id: string, ownerUserId?: string): Promise<{ status: "deleted" }> {
+    await this.requireMailbox(id, ownerUserId);
     const result = await this.repository.deleteMailboxIfEmpty(id);
     if (result === "not_found") {
       throw new MailboxServiceError("Mailbox not found", 404, "MAILBOX_NOT_FOUND");
@@ -658,12 +666,12 @@ export class MailboxService implements MailboxServiceLike {
     return { status: "deleted" };
   }
 
-  async testConnection(id: string): Promise<{
+  async testConnection(id: string, ownerUserId?: string): Promise<{
     status: "ok";
     messagesInInbox: number;
     nextUid: number;
   }> {
-    const row = await this.requireMailbox(id);
+    const row = await this.requireMailbox(id, ownerUserId);
     const config = this.connectionConfig(row);
     const client = this.createImapClient(config);
     try {
@@ -695,8 +703,8 @@ export class MailboxService implements MailboxServiceLike {
     }
   }
 
-  async configureSmtp(id: string, value: unknown): Promise<MailboxSummary> {
-    const row = await this.requireMailbox(id);
+  async configureSmtp(id: string, value: unknown, ownerUserId?: string): Promise<MailboxSummary> {
+    const row = await this.requireMailbox(id, ownerUserId);
     const smtp = validateSmtpInput(value);
     const stored = this.storedConnectionConfig(row);
     const saved = await this.repository.saveSmtpConfig(
@@ -710,11 +718,11 @@ export class MailboxService implements MailboxServiceLike {
         "MAILBOX_NOT_FOUND"
       );
     }
-    return this.toSummary(await this.requireMailbox(id));
+    return this.toSummary(await this.requireMailbox(id, ownerUserId));
   }
 
-  async testSmtp(id: string): Promise<{ status: "ok" }> {
-    const row = await this.requireMailbox(id);
+  async testSmtp(id: string, ownerUserId?: string): Promise<{ status: "ok" }> {
+    const row = await this.requireMailbox(id, ownerUserId);
     const smtp = this.requireSmtpConfig(row);
     const transport = this.smtpFactory(smtpTransportOptions(smtp));
     try {
@@ -730,8 +738,8 @@ export class MailboxService implements MailboxServiceLike {
     }
   }
 
-  async setSmtpEnabled(id: string, enabled: boolean): Promise<MailboxSummary> {
-    const row = await this.requireMailbox(id);
+  async setSmtpEnabled(id: string, enabled: boolean, ownerUserId?: string): Promise<MailboxSummary> {
+    const row = await this.requireMailbox(id, ownerUserId);
     this.requireSmtpConfig(row);
     if (enabled) {
       if (!row.enabled) {
@@ -748,7 +756,7 @@ export class MailboxService implements MailboxServiceLike {
           "SMTP_TEST_REQUIRED"
         );
       }
-      const anotherPilot = (await this.repository.listMailboxes()).some(
+      const anotherPilot = (await this.repository.listMailboxes(ownerUserId)).some(
         (candidate) => candidate.id !== id && candidate.smtpEnabled
       );
       if (anotherPilot) {
@@ -767,17 +775,17 @@ export class MailboxService implements MailboxServiceLike {
         "SMTP_PILOT_ALREADY_ENABLED"
       );
     }
-    return this.toSummary(await this.requireMailbox(id));
+    return this.toSummary(await this.requireMailbox(id, ownerUserId));
   }
 
-  async syncMailbox(id: string): Promise<{
+  async syncMailbox(id: string, ownerUserId?: string): Promise<{
     status: "ok";
     fetched: number;
     inserted: number;
     hasMore: boolean;
     messages: MessageSummary[];
   }> {
-    const row = await this.requireMailbox(id);
+    const row = await this.requireMailbox(id, ownerUserId);
     if (!row.enabled) {
       throw new MailboxServiceError("Mailbox is disabled", 409, "MAILBOX_DISABLED");
     }
@@ -967,14 +975,14 @@ export class MailboxService implements MailboxServiceLike {
     }
   }
 
-  async listMessages(id: string, limit: number): Promise<MessageSummary[]> {
-    await this.requireMailbox(id);
+  async listMessages(id: string, limit: number, ownerUserId?: string): Promise<MessageSummary[]> {
+    await this.requireMailbox(id, ownerUserId);
     const rows = await this.repository.listMessages(id, limit);
     return rows.map((row) => this.messageFromStored(row));
   }
 
-  async analyzeMessage(id: string, messageId: string): Promise<MessageSummary> {
-    const mailbox = await this.requireMailbox(id);
+  async analyzeMessage(id: string, messageId: string, ownerUserId?: string): Promise<MessageSummary> {
+    const mailbox = await this.requireMailbox(id, ownerUserId);
     const row = await this.repository.getMessage(id, messageId);
     if (!row) {
       throw new MailboxServiceError("Message not found", 404, "MESSAGE_NOT_FOUND");
@@ -1015,9 +1023,10 @@ export class MailboxService implements MailboxServiceLike {
   async updateMessageDrafts(
     id: string,
     messageId: string,
-    input: { draftZh: string; draftEn?: string; translate: boolean }
+    input: { draftZh: string; draftEn?: string; translate: boolean },
+    ownerUserId?: string
   ): Promise<MessageSummary> {
-    const mailbox = await this.requireMailbox(id);
+    const mailbox = await this.requireMailbox(id, ownerUserId);
     const row = await this.repository.getMessage(id, messageId);
     if (!row) {
       throw new MailboxServiceError("Message not found", 404, "MESSAGE_NOT_FOUND");
@@ -1082,7 +1091,8 @@ export class MailboxService implements MailboxServiceLike {
       recipient: string;
       draftZh: string;
       draftEn: string;
-    }
+    },
+    ownerUserId?: string
   ): Promise<MessageSummary> {
     if (
       input.confirm !== true ||
@@ -1096,7 +1106,7 @@ export class MailboxService implements MailboxServiceLike {
         "SEND_CONFIRMATION_REQUIRED"
       );
     }
-    const mailbox = await this.requireMailbox(id);
+    const mailbox = await this.requireMailbox(id, ownerUserId);
     if (!mailbox.enabled || !mailbox.smtpEnabled) {
       throw new MailboxServiceError(
         "SMTP sending is not enabled for this pilot mailbox",
@@ -1365,7 +1375,9 @@ export class MailboxService implements MailboxServiceLike {
       ...this.messageFromStored(row),
       mailboxLabel: mailbox.label,
       mailboxEmail: connection.emailAddress,
-      project: mailbox.brand
+      project: mailbox.brand,
+      ...(mailbox.ownerUserId ? { ownerUserId: mailbox.ownerUserId } : {}),
+      ...(mailbox.ownerDisplayName ? { ownerDisplayName: mailbox.ownerDisplayName } : {})
     }));
     for (const message of messages) {
       if (message.classification === "unknown") {
@@ -1434,12 +1446,12 @@ export class MailboxService implements MailboxServiceLike {
     this.reprocessJobs.set(mailboxId, job);
   }
 
-  async syncAllEnabled(): Promise<{
+  async syncAllEnabled(ownerUserId?: string): Promise<{
     attempted: number;
     succeeded: number;
     failed: number;
   }> {
-    const mailboxes = (await this.repository.listMailboxes()).filter((row) => row.enabled);
+    const mailboxes = (await this.repository.listMailboxes(ownerUserId)).filter((row) => row.enabled);
     let succeeded = 0;
     let failed = 0;
     for (const mailbox of mailboxes) {
@@ -1457,13 +1469,13 @@ export class MailboxService implements MailboxServiceLike {
     return { attempted: mailboxes.length, succeeded, failed };
   }
 
-  async getDailySummary(): Promise<DailySummary & { since: string }> {
+  async getDailySummary(ownerUserId?: string): Promise<DailySummary & { since: string }> {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1_000);
-    return { ...(await this.repository.getDailySummary(since)), since: since.toISOString() };
+    return { ...(await this.repository.getDailySummary(since, ownerUserId)), since: since.toISOString() };
   }
 
-  private async requireMailbox(id: string): Promise<StoredMailbox> {
-    const row = await this.repository.getMailbox(id);
+  private async requireMailbox(id: string, ownerUserId?: string): Promise<StoredMailbox> {
+    const row = await this.repository.getMailbox(id, ownerUserId);
     if (!row) {
       throw new MailboxServiceError("Mailbox not found", 404, "MAILBOX_NOT_FOUND");
     }
@@ -1499,6 +1511,8 @@ export class MailboxService implements MailboxServiceLike {
     const smtp = config.smtp;
     return {
       id: row.id,
+      ...(row.ownerUserId ? { ownerUserId: row.ownerUserId } : {}),
+      ...(row.ownerDisplayName ? { ownerDisplayName: row.ownerDisplayName } : {}),
       label: row.label,
       brand: row.brand,
       emailAddress: config.emailAddress,

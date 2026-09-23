@@ -299,6 +299,8 @@ function unmatchedFieldsForMessage(
   if (Number.isFinite(receivedAt)) fields["收件时间"] = receivedAt;
   if (message.project) fields["项目"] = message.project;
   if (message.mailboxEmail) fields["收件邮箱"] = message.mailboxEmail;
+  if (message.ownerDisplayName) fields["负责人"] = message.ownerDisplayName;
+  if (message.ownerUserId) fields["负责人ID"] = message.ownerUserId;
   if (message.analysis) {
     fields["AI中文摘要"] = message.analysis.summaryZh;
     fields["报价"] = quoteText(message.analysis);
@@ -326,6 +328,8 @@ export function baseFieldsForMessage(
       .toLowerCase();
   }
   if (message.project) fields["项目"] = message.project;
+  if (message.ownerDisplayName) fields["负责人"] = message.ownerDisplayName;
+  if (message.ownerUserId) fields["负责人ID"] = message.ownerUserId;
   if (
     message.classification === "creator_reply" &&
     PRE_REPLY_STAGES.has(currentStage(record.fields))

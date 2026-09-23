@@ -29,11 +29,13 @@ import {
   MailboxServiceError,
   type MailboxServiceLike
 } from "./mailbox-service.js";
+import { AuthError, type AuthenticatedUser, type AuthRepository } from "./auth.js";
 
-const APP_VERSION = "5.5.3";
+const APP_VERSION = "6.0.0";
 
 type Logger = Pick<Console, "info" | "error">;
 type RequestWithRawBody = Request & { rawBody?: Buffer };
+type AuthenticatedRequest = Request & { authenticatedUser?: AuthenticatedUser };
 
 export type CreateAppOptions = {
   config: AppConfig;
@@ -46,6 +48,7 @@ export type CreateAppOptions = {
   feishuIndexRefresher?: {
     requestIndexRefresh(): { status: "started" | "already_running" };
   };
+  authRepository?: AuthRepository;
 };
 
 function safeEqual(left: string, right: string): boolean {
@@ -65,7 +68,7 @@ function bearerToken(request: Request): string | undefined {
   return header.slice("Bearer ".length).trim() || undefined;
 }
 
-function requireAdminToken(config: AppConfig): RequestHandler {
+function requireAdminToken(config: AppConfig, authRepository?: AuthRepository): RequestHandler {
   return (request: Request, response: Response, next: NextFunction): void => {
     const providedToken = bearerToken(request);
     if (!providedToken) {
@@ -75,15 +78,32 @@ function requireAdminToken(config: AppConfig): RequestHandler {
       });
       return;
     }
-    if (!safeEqual(providedToken, config.adminToken)) {
-      response.status(403).json({
-        error: "forbidden",
-        message: "Invalid admin token"
-      });
+    if (safeEqual(providedToken, config.adminToken)) {
+      next();
       return;
     }
-    next();
+    if (!authRepository) {
+      response.status(403).json({ error: "forbidden", message: "Invalid login session" });
+      return;
+    }
+    void authRepository.authenticate(providedToken).then((user) => {
+      if (!user) {
+        response.status(403).json({ error: "forbidden", message: "登录已过期，请重新登录" });
+        return;
+      }
+      (request as AuthenticatedRequest).authenticatedUser = user;
+      next();
+    }).catch(next);
   };
+}
+
+function ownerUserId(request: Request): string | undefined {
+  const user = (request as AuthenticatedRequest).authenticatedUser;
+  return user?.role === "member" ? user.id : undefined;
+}
+
+function signedInUserId(request: Request): string | undefined {
+  return (request as AuthenticatedRequest).authenticatedUser?.id;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -152,7 +172,97 @@ export function createApp(options: CreateAppOptions): express.Express {
     });
   });
 
-  const adminOnly = requireAdminToken(config);
+  const adminOnly = requireAdminToken(config, options.authRepository);
+
+  if (options.authRepository) {
+    app.get("/api/auth/status", async (_request, response, next) => {
+      try {
+        response.status(200).json({ initialized: await options.authRepository!.hasUsers() });
+      } catch (error) { next(error); }
+    });
+    app.post("/api/auth/bootstrap", requireAdminToken(config), async (request, response, next) => {
+      try {
+        const body = request.body as Record<string, unknown>;
+        if (!isPlainObject(body) || typeof body.email !== "string" ||
+            typeof body.displayName !== "string" || typeof body.password !== "string") {
+          response.status(400).json({ error: "invalid_request", message: "请输入姓名、邮箱和密码" });
+          return;
+        }
+        const user = await options.authRepository!.bootstrapOwner({
+          email: body.email, displayName: body.displayName, password: body.password
+        });
+        response.status(201).json({ user });
+      } catch (error) { next(error); }
+    });
+    app.post("/api/auth/login", async (request, response, next) => {
+      try {
+        const body = request.body as Record<string, unknown>;
+        if (!isPlainObject(body) || typeof body.email !== "string" || typeof body.password !== "string") {
+          response.status(400).json({ error: "invalid_request", message: "请输入邮箱和密码" });
+          return;
+        }
+        response.status(200).json(await options.authRepository!.login(body.email, body.password));
+      } catch (error) { next(error); }
+    });
+    app.get("/api/auth/me", adminOnly, (request, response) => {
+      response.status(200).json({ user: (request as AuthenticatedRequest).authenticatedUser ?? null });
+    });
+    app.post("/api/auth/logout", adminOnly, async (request, response, next) => {
+      try {
+        const token = bearerToken(request);
+        if (token && !safeEqual(token, config.adminToken)) await options.authRepository!.logout(token);
+        response.status(204).end();
+      } catch (error) { next(error); }
+    });
+    app.get("/api/team/members", adminOnly, async (request, response, next) => {
+      try {
+        const actor = (request as AuthenticatedRequest).authenticatedUser;
+        if (!actor) throw new AuthError("请使用团队账号登录", 403, "TEAM_LOGIN_REQUIRED");
+        response.status(200).json({ members: await options.authRepository!.listMembers(actor) });
+      } catch (error) { next(error); }
+    });
+    app.post("/api/team/members", adminOnly, async (request, response, next) => {
+      try {
+        const actor = (request as AuthenticatedRequest).authenticatedUser;
+        const body = request.body as Record<string, unknown>;
+        if (!actor) throw new AuthError("请使用团队账号登录", 403, "TEAM_LOGIN_REQUIRED");
+        if (!isPlainObject(body) || typeof body.email !== "string" ||
+            typeof body.displayName !== "string" || typeof body.password !== "string" ||
+            (body.role !== "admin" && body.role !== "member")) {
+          throw new AuthError("成员资料不完整", 400, "INVALID_MEMBER");
+        }
+        const member = await options.authRepository!.createMember(actor, {
+          email: body.email, displayName: body.displayName, password: body.password, role: body.role
+        });
+        response.status(201).json({ member });
+      } catch (error) { next(error); }
+    });
+    app.patch("/api/team/members/:userId/status", adminOnly, async (request, response, next) => {
+      try {
+        const actor = (request as AuthenticatedRequest).authenticatedUser;
+        const body = request.body as Record<string, unknown>;
+        if (!actor) throw new AuthError("请使用团队账号登录", 403, "TEAM_LOGIN_REQUIRED");
+        if (!validIdentifier(request.params.userId, 128) || !isPlainObject(body) || typeof body.enabled !== "boolean") {
+          throw new AuthError("成员状态参数无效", 400, "INVALID_MEMBER_STATUS");
+        }
+        await options.authRepository!.setMemberEnabled(actor, request.params.userId, body.enabled);
+        response.status(200).json({ status: "updated" });
+      } catch (error) { next(error); }
+    });
+    app.patch("/api/team/mailboxes/:mailboxId/owner", adminOnly, async (request, response, next) => {
+      try {
+        const actor = (request as AuthenticatedRequest).authenticatedUser;
+        const body = request.body as Record<string, unknown>;
+        if (!actor) throw new AuthError("请使用团队账号登录", 403, "TEAM_LOGIN_REQUIRED");
+        if (!validIdentifier(request.params.mailboxId, 128) || !isPlainObject(body) ||
+            typeof body.userId !== "string" || !validIdentifier(body.userId, 128)) {
+          throw new AuthError("邮箱分配参数无效", 400, "INVALID_MAILBOX_ASSIGNMENT");
+        }
+        await options.authRepository!.assignMailbox(actor, request.params.mailboxId, body.userId);
+        response.status(200).json({ status: "updated" });
+      } catch (error) { next(error); }
+    });
+  }
 
   const adminHeaders = (response: Response, contentType: string): void => {
     response.set({
@@ -195,9 +305,9 @@ export function createApp(options: CreateAppOptions): express.Express {
     return mailboxService;
   };
 
-  app.get("/api/admin/mailboxes", adminOnly, async (_request, response, next) => {
+  app.get("/api/admin/mailboxes", adminOnly, async (request, response, next) => {
     try {
-      const mailboxes = await requireMailboxService().listMailboxes();
+      const mailboxes = await requireMailboxService().listMailboxes(ownerUserId(request));
       response.status(200).json({ mailboxes });
     } catch (error) {
       next(error);
@@ -207,7 +317,8 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.post("/api/admin/mailboxes", adminOnly, async (request, response, next) => {
     try {
       const mailbox = await requireMailboxService().createMailbox(
-        request.body as unknown
+        request.body as unknown,
+        signedInUserId(request)
       );
       response.status(201).json({ mailbox });
     } catch (error) {
@@ -228,7 +339,7 @@ export function createApp(options: CreateAppOptions): express.Express {
           });
           return;
         }
-        const result = await requireMailboxService().testConnection(mailboxId);
+        const result = await requireMailboxService().testConnection(mailboxId, ownerUserId(request));
         response.status(200).json(result);
       } catch (error) {
         next(error);
@@ -251,7 +362,8 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const mailbox = await requireMailboxService().configureSmtp(
           mailboxId,
-          request.body as unknown
+          request.body as unknown,
+          ownerUserId(request)
         );
         response.status(200).json({ mailbox });
       } catch (error) {
@@ -274,7 +386,7 @@ export function createApp(options: CreateAppOptions): express.Express {
           return;
         }
         response.status(200).json(
-          await requireMailboxService().testSmtp(mailboxId)
+          await requireMailboxService().testSmtp(mailboxId, ownerUserId(request))
         );
       } catch (error) {
         next(error);
@@ -302,7 +414,8 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const mailbox = await requireMailboxService().setSmtpEnabled(
           mailboxId,
-          body.enabled
+          body.enabled,
+          ownerUserId(request)
         );
         response.status(200).json({ mailbox });
       } catch (error) {
@@ -331,7 +444,8 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const mailbox = await requireMailboxService().setMailboxEnabled(
           mailboxId,
-          body.enabled
+          body.enabled,
+          ownerUserId(request)
         );
         response.status(200).json({ mailbox });
       } catch (error) {
@@ -350,7 +464,7 @@ export function createApp(options: CreateAppOptions): express.Express {
           response.status(400).json({ error: "invalid_request", message: "mailboxId is invalid" });
           return;
         }
-        const result = await requireMailboxService().deleteMailbox(mailboxId);
+        const result = await requireMailboxService().deleteMailbox(mailboxId, ownerUserId(request));
         response.status(200).json(result);
       } catch (error) {
         next(error);
@@ -361,9 +475,9 @@ export function createApp(options: CreateAppOptions): express.Express {
   app.get(
     "/api/admin/daily-summary",
     adminOnly,
-    async (_request, response, next) => {
+    async (request, response, next) => {
       try {
-        response.status(200).json(await requireMailboxService().getDailySummary());
+        response.status(200).json(await requireMailboxService().getDailySummary(ownerUserId(request)));
       } catch (error) {
         next(error);
       }
@@ -413,7 +527,8 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const message = await requireMailboxService().analyzeMessage(
           mailboxId,
-          messageId
+          messageId,
+          ownerUserId(request)
         );
         response.status(200).json({ message });
       } catch (error) {
@@ -474,7 +589,7 @@ export function createApp(options: CreateAppOptions): express.Express {
           });
           return;
         }
-        const result = await requireMailboxService().syncMailbox(mailboxId);
+        const result = await requireMailboxService().syncMailbox(mailboxId, ownerUserId(request));
         response.status(200).json(result);
       } catch (error) {
         next(error);
@@ -508,7 +623,8 @@ export function createApp(options: CreateAppOptions): express.Express {
         }
         const messages = await requireMailboxService().listMessages(
           mailboxId,
-          limit
+          limit,
+          ownerUserId(request)
         );
         response.status(200).json({ messages });
       } catch (error) {
@@ -760,6 +876,11 @@ export function createApp(options: CreateAppOptions): express.Express {
         error: error.errorCode,
         message: error.message
       });
+      return;
+    }
+
+    if (error instanceof AuthError) {
+      response.status(error.status).json({ error: error.code, message: error.message });
       return;
     }
 

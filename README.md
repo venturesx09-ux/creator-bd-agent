@@ -1,4 +1,29 @@
-# Creator BD Agent — Phase 5.5.3
+# Creator BD Agent — Flourish Culture Team 6.0.0
+
+## 团队版升级
+
+团队版在原有邮箱同步、飞书匹配和AI中文摘要能力上增加：
+
+- Flourish Culture工作空间与邮箱密码登录；
+- `owner`、`admin`、`member`三级权限；
+- 管理员创建、停用团队成员并分配历史邮箱；
+- 普通成员只能访问自己的邮箱、邮件和24小时概览；
+- 邮件写回统一飞书Base时自动填写`负责人`和`负责人ID`；
+- 原`ADMIN_TOKEN`仅用于首次创建Owner及紧急恢复；
+- 原有邮箱、邮件和AI分析数据原地保留，不重新导入。
+
+首次部署后访问`/admin`，使用Render中的`ADMIN_TOKEN`创建第一个Owner账号。
+Flourish Culture应先创建Irisa为Owner，再创建Shark为Admin，以及Eden、Adriana、
+Kristin为Member。初始化时历史邮箱会暂时归入Owner，之后可在邮箱卡片中将其
+分配给Shark或其他实际负责人。
+
+飞书达人主表应包含：
+
+- `负责人`：单选，选项为Shark、Eden、Adriana、Kristin（Irisa仅在直接负责达人时添加）；
+- `负责人ID`：文本；
+- 现有的`邮件同步状态`、`AI中文摘要`、报价及合作阶段等字段。
+
+部署升级时必须保留现有`MAILBOX_ENCRYPTION_KEY`，否则已保存的邮箱凭证将无法解密。
 
 这是Creator BD Agent的“邮件分析与飞书写回工作台”。当前版本保留IMAP只读同步、飞书匹配和AI分析，并暂停旧的回复草稿与邮件发送界面：
 

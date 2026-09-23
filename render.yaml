@@ -39,10 +39,3 @@ services:
         value: https://aihubmix.com/v1
       - key: OPENAI_MODEL
         value: gpt-5.6-luna
-
-databases:
-  - name: creator-bd-agent-db
-    plan: free
-    databaseName: creator_bd_agent
-    user: creator_bd_agent
-    ipAllowList: []
