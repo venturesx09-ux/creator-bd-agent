@@ -72,7 +72,7 @@ export const ADMIN_HTML = `<!doctype html>
       </section>
 
       <section class="panel" id="team-panel" hidden>
-        <div class="section-heading"><div><h2>团队成员</h2><p class="muted">管理员可以创建或停用成员；普通成员只能看到自己的邮箱和邮件。</p></div></div>
+        <div class="section-heading"><div><h2>团队成员</h2><p class="muted">所有者可以调整成员身份；管理员可以创建或停用成员；普通成员只能看到自己的邮箱和邮件。</p></div></div>
         <div id="member-list" class="cards"></div>
         <form id="member-form">
           <div class="grid">
@@ -225,10 +225,37 @@ export const ADMIN_JS = `(() => {
       info.append(element('h3', member.displayName));
       info.append(element('div', member.email + ' · ' + ({ owner: '所有者', admin: '管理员', member: '普通成员' }[member.role] || member.role), 'meta'));
       top.append(info);
-      if (member.role !== 'owner') top.append(button(member.enabled ? '停用' : '启用', async () => {
-        await api('/api/team/members/' + member.id + '/status', { method: 'PATCH', body: JSON.stringify({ enabled: !member.enabled }) });
-        await loadMembers();
-      }));
+      if (member.role !== 'owner') {
+        if (currentUser.role === 'owner') {
+          const roleSelect = element('select');
+          roleSelect.setAttribute('aria-label', member.displayName + '的角色');
+          [['member', '普通成员'], ['admin', '管理员']].forEach(([value, label]) => {
+            const option = element('option', label);
+            option.value = value;
+            option.selected = member.role === value;
+            roleSelect.append(option);
+          });
+          roleSelect.addEventListener('change', async () => {
+            const previousRole = member.role;
+            roleSelect.disabled = true;
+            try {
+              await api('/api/team/members/' + member.id + '/role', {
+                method: 'PATCH', body: JSON.stringify({ role: roleSelect.value })
+              });
+              notify('成员身份已更新');
+              await loadMembers();
+            } catch (error) {
+              roleSelect.value = previousRole;
+              notify(error.message, true);
+            } finally { roleSelect.disabled = false; }
+          });
+          top.append(roleSelect);
+        }
+        top.append(button(member.enabled ? '停用' : '启用', async () => {
+          await api('/api/team/members/' + member.id + '/status', { method: 'PATCH', body: JSON.stringify({ enabled: !member.enabled }) });
+          await loadMembers();
+        }));
+      }
       card.append(top); list.append(card);
     });
     byId('team-panel').hidden = false;

@@ -1,4 +1,4 @@
-# Creator BD Agent — Flourish Culture Team 6.0.0
+# Creator BD Agent — Flourish Culture Team 6.0.1
 
 ## 团队版升级
 
