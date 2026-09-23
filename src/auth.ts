@@ -322,6 +322,23 @@ export class AuthRepository {
     if (!enabled) await this.pool.query("DELETE FROM user_sessions WHERE user_id = $1", [userId]);
   }
 
+  async setMemberRole(
+    actor: AuthenticatedUser,
+    userId: string,
+    role: Exclude<UserRole, "owner">
+  ): Promise<void> {
+    if (actor.role !== "owner") throw new AuthError("仅所有者可以修改成员身份", 403, "OWNER_REQUIRED");
+    if (role !== "admin" && role !== "member") throw new AuthError("成员角色无效", 400, "INVALID_ROLE");
+    if (userId === actor.id) throw new AuthError("不能修改所有者身份", 409, "CANNOT_CHANGE_OWNER");
+    const result = await this.pool.query(
+      `UPDATE workspace_members
+       SET role = $3
+       WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'`,
+      [actor.workspaceId, userId, role]
+    );
+    if (!result.rowCount) throw new AuthError("成员不存在或不可修改", 404, "MEMBER_NOT_FOUND");
+  }
+
   async assignMailbox(actor: AuthenticatedUser, mailboxId: string, userId: string): Promise<void> {
     if (actor.role === "member") throw new AuthError("没有邮箱分配权限", 403, "FORBIDDEN");
     const result = await this.pool.query(

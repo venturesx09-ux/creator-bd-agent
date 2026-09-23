@@ -31,7 +31,7 @@ import {
 } from "./mailbox-service.js";
 import { AuthError, type AuthenticatedUser, type AuthRepository } from "./auth.js";
 
-const APP_VERSION = "6.0.0";
+const APP_VERSION = "6.0.1";
 
 type Logger = Pick<Console, "info" | "error">;
 type RequestWithRawBody = Request & { rawBody?: Buffer };
@@ -246,6 +246,19 @@ export function createApp(options: CreateAppOptions): express.Express {
           throw new AuthError("成员状态参数无效", 400, "INVALID_MEMBER_STATUS");
         }
         await options.authRepository!.setMemberEnabled(actor, request.params.userId, body.enabled);
+        response.status(200).json({ status: "updated" });
+      } catch (error) { next(error); }
+    });
+    app.patch("/api/team/members/:userId/role", adminOnly, async (request, response, next) => {
+      try {
+        const actor = (request as AuthenticatedRequest).authenticatedUser;
+        const body = request.body as Record<string, unknown>;
+        if (!actor) throw new AuthError("请使用团队账号登录", 403, "TEAM_LOGIN_REQUIRED");
+        if (!validIdentifier(request.params.userId, 128) || !isPlainObject(body) ||
+            (body.role !== "admin" && body.role !== "member")) {
+          throw new AuthError("成员角色参数无效", 400, "INVALID_MEMBER_ROLE");
+        }
+        await options.authRepository!.setMemberRole(actor, request.params.userId, body.role);
         response.status(200).json({ status: "updated" });
       } catch (error) { next(error); }
     });
